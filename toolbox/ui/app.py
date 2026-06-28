@@ -59,7 +59,9 @@ class App:
         self.f_big = pygame.font.Font(fp, int(44 * s))
         self.f_mid = pygame.font.Font(fp, int(30 * s))
         self.f_small = pygame.font.Font(fp, int(23 * s))
+        self.f_tiny = pygame.font.Font(fp, int(16 * s))   # log tail: fit more lines
         self.row_h = int(38 * s)
+        self.tiny_row_h = int(21 * s)
         self.s = s
         self.bver = bios.batocera_version()      # for the footer wordmark
 
@@ -349,7 +351,7 @@ class App:
     def draw_main(self) -> None:
         self._title("BATOCERA TOOLBOX")
         labels = [name for name, _ in self.MAIN_ITEMS]
-        self._list(labels, self.menu_index, top=int(self.H * 0.34))
+        self._list(labels, self.menu_index, top=int(self.H * 0.22))
         self._hint(["Up/Down: move", "Enter/A: open", "Esc/B: back"])
 
     # ===================================================================
@@ -1239,10 +1241,15 @@ class App:
         maxc = max(1, avail_px // cw)
         return text if len(text) <= maxc else text[:max(1, maxc - 3)] + "..."
 
+    def _log_view_rows(self) -> int:
+        """Lines that fit in the tail viewport (top 0.16H .. 0.88H)."""
+        return max(1, (int(self.H * 0.88) - int(self.H * 0.16)) // self.tiny_row_h)
+
     def _open_log(self, lf) -> None:
         self.log_detail_name = lf.name
         self.log_detail_lines = logs.tail(lf.path)
-        self.log_detail_index = 0
+        # Open at the tail: the crash and its last words are at the end.
+        self.log_detail_index = max(0, len(self.log_detail_lines) - self._log_view_rows())
         self.state = "log_detail"
 
     def on_logs(self, action: str) -> None:
@@ -1300,9 +1307,17 @@ class App:
             self.state = "logs"
             return
         n = len(self.log_detail_lines)
-        if n and action in (UP, DOWN):
+        if not n:
+            return
+        rows = self._log_view_rows()
+        top_max = max(0, n - rows)            # scroll so the last line can reach the top row
+        if action in (UP, DOWN):
             step = 1 if action == DOWN else -1
-            self.log_detail_index = max(0, min(self.log_detail_index + step, n - 1))
+        elif action == SELECT:                # X: page jump, wraps at the bottom
+            step = rows if self.log_detail_index < top_max else -self.log_detail_index
+        else:
+            return
+        self.log_detail_index = max(0, min(self.log_detail_index + step, top_max))
 
     def draw_log_detail(self) -> None:
         self._title(self._clip(self.log_detail_name or "LOG", self.f_big,
@@ -1316,17 +1331,20 @@ class App:
                        int(self.H * 0.45), color=DIM, left=left)
             self._hint(["Esc/B: back"])
             return
-        max_rows = 13
-        idx = self.log_detail_index
-        top = int(self.H * 0.18)
-        start = max(0, min(idx - max_rows // 2, max(0, len(lines) - max_rows)))
+        max_rows = self._log_view_rows()
+        top = int(self.H * 0.16)
+        # No selection cursor here: the index IS the top visible line, so the
+        # viewport moves one line per press (centering made early presses look dead).
+        start = max(0, min(self.log_detail_index, max(0, len(lines) - max_rows)))
         for i, line in enumerate(lines[start:start + max_rows]):
-            self._text(self.f_small, self._clip(line, self.f_small, avail),
-                       top + i * self.row_h, color=WHITE, left=left)
-        self._text(self.f_small,
-                   f"{start + 1}-{min(start + max_rows, len(lines))} of {len(lines)}",
-                   int(self.H * 0.92), color=DIM)
-        self._hint(["Up/Down: scroll", "Esc/B: back"])
+            self._text(self.f_tiny, self._clip(line, self.f_tiny, avail),
+                       top + i * self.tiny_row_h, color=WHITE, left=left)
+        # Position counter, right-aligned on the hint's baseline (keeps it off the hint text).
+        counter = f"{start + 1}-{min(start + max_rows, len(lines))} of {len(lines)}"
+        cs = self.f_small.render(counter, True, DIM)
+        cy = self.H - m - int(12 * self.s) - self.f_small.get_height()
+        self.screen.blit(cs, (self.W - m - int(16 * self.s) - cs.get_width(), cy))
+        self._hint(["Up/Down: scroll", "X: page", "Esc/B: back"])
 
     def _title(self, text: str) -> None:
         m = getattr(self, "_m", int(min(self.W, self.H) * 0.03))
