@@ -1,10 +1,10 @@
 # Batocera Toolbox
 
 A couch-friendly, gamepad-driven utility **Port** for [Batocera](https://batocera.org).
-One app, six modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
-**Shaders**, and **Controller setup**. It installs into the PORTS menu and runs
-entirely on the machine, so you maintain your cabinet from the couch instead of
-SSHing in.
+One app, seven modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
+**Shaders**, **Library (1G1R)**, and **Controller setup**. It installs into the
+PORTS menu and runs entirely on the machine, so you maintain your cabinet from
+the couch instead of SSHing in.
 
 It uses a RetroArch RGUI look (phosphor green on near-black, double-line border,
 monospace), so it feels native next to the rest of Batocera.
@@ -39,9 +39,9 @@ Two design choices keep it trustworthy:
 |---|---|---|
 | ![BIOS Check](screenshots/05-bios.png) | ![BIOS detail](screenshots/06-bios-detail.png) | ![Shaders](screenshots/07-shaders.png) |
 
-| Controller setup |
-|---|
-| ![Controller setup](screenshots/08-controller-setup.png) |
+| Library (1G1R) | 1G1R preview | Controller setup |
+|---|---|---|
+| ![Library systems](screenshots/09-library-systems.png) | ![1G1R preview](screenshots/10-library-preview.png) | ![Controller setup](screenshots/08-controller-setup.png) |
 
 ## Modules
 
@@ -91,6 +91,30 @@ shader presets that actually exist under `/usr/share/batocera/shaders` +
 only a real preset (an invalid value is rejected *before* the file is written).
 A timestamped `batocera.conf.bak-toolbox-*` is written before each edit; every
 other conf line is preserved.
+
+### Library (1G1R)
+**1G1R** ("1 Game 1 ROM") collapses a No-Intro/Redump set, which ships many
+regional/revision variants of each game, down to one preferred copy per game.
+Instead of moving or deleting files, the Toolbox **hides** the non-winners in
+`gamelist.xml` (`<hidden>true</hidden>`), which is in-place, reversible, and
+respects the hide-based curation Batocera already uses.
+
+Gamelist-first (like Audit): it parses the No-Intro filenames in each `<game>`
+entry, groups by base title, and picks a winner per group with the policy
+**region `USA > World > Europe > Japan > rest` -> latest revision -> English
+tiebreak**, dropping Beta/Proto/Demo/Sample/Program/Pirate/Aftermarket from
+winner candidacy (`Unl` is kept: often the only copy). Multi-disc winners keep
+**all** discs of the winning release; only other regions' discs hide.
+
+Per-system flow: pick a system (the picker shows eligible systems with a
+`GAMES / TO HIDE / SKIPPED` count) -> scroll the exact list of variants that will
+be hidden -> confirm. **Guards (always on):** additive only (it only ever *adds*
+`hidden`, never un-hides, so manual curation is preserved); never hides a
+**Favorite**; **skips** groups with an ambiguous winner (true tie, no tiebreak),
+leaving them visible and counted; **arcade families excluded entirely**
+(`arcade/mame/fbneo/naomi/...` use short-code names where 1G1R is meaningless). A
+`gamelist.xml.bak-toolbox-*` is written before the edit; un-hide in EmulationStation
+to revert. Read-only until you confirm; no files are ever moved or deleted.
 
 ### Controller setup
 Keyboard always works (arrows / WASD, Enter = confirm, Esc = back, Space =
@@ -159,6 +183,7 @@ toolbox/
       audit.py          read-only ROM dashboard
       bios.py           version-aware BIOS check (parses batocera-systems)
       shaders.py        per-system renderer-path picker
+      library.py        1G1R dedup: hide redundant variants in gamelist.xml
     ui/app.py           pygame state-machine UI (menu + all modules)
     ui/controls.py      keyboard + gamepad input, first-run button wizard
     assets/             bundled DejaVuSansMono.ttf
@@ -172,7 +197,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 76 assertions, no pygame/network needed
+python3 tests/selftest.py      # 122 assertions, no pygame/network needed
 ```
 
 ## License

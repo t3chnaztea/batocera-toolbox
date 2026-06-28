@@ -324,6 +324,133 @@ def test_restore(tmp: Path) -> None:
     check("empty listing -> []", restore.parse_remote_listing("") == [])
 
 
+def test_library(tmp: Path) -> None:
+    from toolbox.core import config, library
+    import xml.etree.ElementTree as ET
+    print("[library]")
+
+    # --- filename parser ---
+    p = library.parse_name("Sonic the Hedgehog (USA, Europe).md")
+    check("base = text before first paren, casefolded", p.base == "sonic the hedgehog")
+    check("region picks first known token", p.region == "USA")
+    check("clean release has no dev status", p.dev_status == "")
+    check("base release revision sorts lowest", p.revision == (0,))
+
+    check("Rev 2 > Rev 1",
+          library.parse_name("G (USA) (Rev 2).md").revision
+          > library.parse_name("G (USA) (Rev 1).md").revision)
+    check("Rev A < Rev B",
+          library.parse_name("G (USA) (Rev A).md").revision
+          < library.parse_name("G (USA) (Rev B).md").revision)
+    check("v1.0 < v1.1",
+          library.parse_name("G (World) (v1.0).md").revision
+          < library.parse_name("G (World) (v1.1).md").revision)
+    check("base release < Rev 1",
+          library.parse_name("G (USA).md").revision
+          < library.parse_name("G (USA) (Rev 1).md").revision)
+
+    check("languages parsed", library.parse_name("G (Europe) (En,Fr,De).md").languages == ["En", "Fr", "De"])
+    for tok, st in [("Beta", "beta"), ("Proto", "proto"), ("Demo", "demo"),
+                    ("Sample", "sample"), ("Program", "program"),
+                    ("Pirate", "pirate"), ("Aftermarket", "aftermarket")]:
+        check(f"dev status {tok}", library.parse_name(f"G (USA) ({tok}).md").dev_status == st)
+    check("Unl is not an exclusion", library.parse_name("G (Asia) (Unl).md").dev_status == "")
+    check("disc number parsed", library.parse_name("FF VII (USA) (Disc 1).cue").disc == 1)
+    check("single disc -> 0", library.parse_name("G (USA).md").disc == 0)
+    check("base splits on FIRST paren only",
+          library.parse_name("Game (Demo) Special (USA).md").base == "game")
+    check("path value kept verbatim as match key",
+          library.parse_name("./sub/Sonic (USA).md").path == "./sub/Sonic (USA).md")
+    check("base parsed from basename even with dir prefix",
+          library.parse_name("./sub/Sonic (USA).md").base == "sonic")
+
+    # --- grouping ---
+    groups = library.group_games([library.parse_name(n) for n in
+                                  ["Sonic (USA).md", "Sonic (Europe).md",
+                                   "Sonic (Japan).md", "Mario (USA).md"]])
+    check("group by base", set(groups) == {"sonic", "mario"})
+    check("sonic has 3 variants", len(groups["sonic"]) == 3)
+
+    def W(names):
+        return library.pick_winner([library.parse_name(n) for n in names])
+
+    check("USA beats Europe beats Japan",
+          W(["G (Japan).md", "G (Europe).md", "G (USA).md"]).region == "USA")
+    check("World beats Europe", W(["G (Europe).md", "G (World).md"]).region == "World")
+    check("latest rev wins within region",
+          W(["G (USA).md", "G (USA) (Rev 1).md", "G (USA) (Rev 2).md"]).raw == "G (USA) (Rev 2).md")
+    check("English-language tiebreak",
+          W(["G (Europe) (Fr).md", "G (Europe) (En).md"]).raw == "G (Europe) (En).md")
+    check("proto-only group has no winner", W(["G (USA) (Proto).md"]) is None)
+
+    # --- plan_hides ---
+    def plan(names):
+        return library.plan_hides([library.parse_name(n) for n in names])
+
+    d = plan(["G (USA).md", "G (Europe).md", "G (Japan).md"])
+    check("winner is USA", d.winner.region == "USA")
+    check("hide the two non-winner regions", set(d.hide) == {"G (Europe).md", "G (Japan).md"})
+    check("clean group not skipped", d.skipped is False)
+
+    d2 = plan(["G (USA).md", "G (USA) (Beta).md", "G (Europe).md"])
+    check("beta hidden alongside other regions when a real release wins",
+          set(d2.hide) == {"G (USA) (Beta).md", "G (Europe).md"})
+
+    d3 = plan(["G (USA) (Proto).md", "G (Japan) (Proto).md"])
+    check("proto-only keeps every copy visible", d3.hide == [] and d3.winner is None)
+
+    d4 = plan(["G (Europe) (Fr).md", "G (Europe) (De).md"])
+    check("ambiguous winner -> skipped, nothing hidden", d4.skipped is True and d4.hide == [])
+
+    d5 = plan(["FF (USA) (Disc 1).cue", "FF (USA) (Disc 2).cue",
+               "FF (Europe) (Disc 1).cue", "FF (Europe) (Disc 2).cue"])
+    check("multi-disc winner keeps all its discs, hides other region's discs",
+          set(d5.hide) == {"FF (Europe) (Disc 1).cue", "FF (Europe) (Disc 2).cue"})
+
+    # --- eligibility + apply against a canned gamelist ---
+    roms = config.roms_dir()
+    gen = roms / "genesis"
+    gen.mkdir(parents=True, exist_ok=True)
+    gl = gen / "gamelist.xml"
+    gl.write_text(
+        '<?xml version="1.0"?>\n<gameList>\n'
+        '  <game><path>./Sonic (USA).md</path><name>Sonic</name></game>\n'
+        '  <game><path>./Sonic (Europe).md</path><name>Sonic</name></game>\n'
+        '  <game><path>./Sonic (Japan).md</path><name>Sonic</name><favorite>true</favorite></game>\n'
+        '  <game><path>./Streets (USA).md</path><name>Streets</name><hidden>true</hidden></game>\n'
+        '  <game><path>./Streets (Europe).md</path><name>Streets</name></game>\n'
+        '</gameList>\n', encoding="utf-8")
+
+    arc = roms / "arcade"
+    arc.mkdir(parents=True, exist_ok=True)
+    (arc / "gamelist.xml").write_text(
+        '<?xml version="1.0"?>\n<gameList>\n'
+        '  <game><path>./sf2.zip</path><name>Street Fighter II</name></game>\n'
+        '</gameList>\n', encoding="utf-8")
+
+    elig = library.eligible_systems()
+    check("region-tagged system is eligible", "genesis" in elig)
+    check("arcade family excluded from eligibility", "arcade" not in elig)
+
+    sp = library.plan_system("genesis")
+    check("plan hides Sonic Europe + Streets Europe",
+          set(sp.hide) == {"./Sonic (Europe).md", "./Streets (Europe).md"})
+    check("favorite Japan variant not in hide list", "./Sonic (Japan).md" not in sp.hide)
+    check("plan reports one protected favorite", sp.fav_protected == 1)
+
+    res = library.apply_hides("genesis", sp.hide)
+    check("apply reports 2 hidden", res.hidden == 2)
+    root = ET.parse(gl).getroot()
+    hidden = {g.findtext("path") for g in root.findall("game")
+              if (g.findtext("hidden") or "") == "true"}
+    check("Sonic Europe now hidden", "./Sonic (Europe).md" in hidden)
+    check("favorite Sonic Japan still visible", "./Sonic (Japan).md" not in hidden)
+    check("pre-hidden winner Streets USA stays hidden (additive, never un-hides)",
+          "./Streets (USA).md" in hidden)
+    check("gamelist backup written before edit",
+          any(c.name.startswith("gamelist.xml.bak-toolbox-") for c in gen.iterdir()))
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -337,6 +464,7 @@ def main() -> int:
         test_shaders(tmp)
         test_bios(tmp)
         test_restore(tmp)
+        test_library(tmp)
     print(f"\n{PASS} OK, {FAIL} NO")
     return 1 if FAIL else 0
 

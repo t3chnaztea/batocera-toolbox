@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pygame
 
-from ..core import config, backup, audit, shaders, bios, restore
+from ..core import config, backup, audit, shaders, bios, restore, library
 from . import controls
 from .controls import UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, SELECT, QUIT
 
@@ -122,6 +122,14 @@ class App:
         self.rs_listed = False
         self.rs_result: restore.RestoreResult | None = None
 
+        # library (1G1R) state
+        self.lib_plans: list[library.SystemPlan] = []
+        self.lib_done = False
+        self.lib_index = 0               # selected system in the systems list
+        self.lib_preview_index = 0       # scroll position in the hide preview
+        self.lib_result: library.ApplyResult | None = None
+        self.lib_apply_done = False
+
     # ===================================================================
     def run(self) -> None:
         while self.running:
@@ -154,8 +162,8 @@ class App:
     # ===================================================================
     MAIN_ITEMS = [("Backup", "backup"), ("Restore", "restore"),
                   ("ROM Audit", "audit_run"), ("BIOS Check", "bios_run"),
-                  ("Shaders", "shaders"), ("Controller setup", "ctlsetup"),
-                  ("Quit", "quit")]
+                  ("Shaders", "shaders"), ("Library (1G1R)", "library"),
+                  ("Controller setup", "ctlsetup"), ("Quit", "quit")]
 
     def on_main(self, action: str) -> None:
         self._move(len(self.MAIN_ITEMS), action)
@@ -206,6 +214,14 @@ class App:
         self._worker = threading.Thread(target=self._restore_list_thread, daemon=True)
         self._worker.start()
         self.state = "restore_loading"
+
+    def _enter_library(self) -> None:
+        self.lib_plans = []
+        self.lib_done = False
+        self.lib_index = 0
+        self._worker = threading.Thread(target=self._library_thread, daemon=True)
+        self._worker.start()
+        self.state = "library_loading"
 
     def _enter_ctlsetup(self) -> None:
         if not self.input.has_joystick():
@@ -584,6 +600,153 @@ class App:
         self._hint(["please wait..."])
 
     # ===================================================================
+    # LIBRARY (1G1R): hide redundant regional/revision variants in gamelist
+    # ===================================================================
+    def _library_thread(self) -> None:
+        # Build a hide plan per eligible system; keep only ones with work to do.
+        plans = [library.plan_system(s) for s in library.eligible_systems()]
+        self.lib_plans = [p for p in plans if p.hide or p.n_skipped]
+        self.lib_done = True
+
+    def draw_library_loading(self) -> None:
+        self._title("LIBRARY (1G1R)")
+        self._text(self.f_mid, "Scanning gamelists for duplicate variants...",
+                   int(self.H * 0.45), color=TEAL)
+        self._hint(["please wait..."])
+
+    LIB_COLS = [("SYSTEM", 0.09, "l"), ("GAMES", 0.55, "r"),
+                ("TO HIDE", 0.76, "r"), ("SKIPPED", 0.95, "r")]
+
+    def on_library_systems(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "main", 0
+            return
+        if not self.lib_plans:
+            return
+        self._move(len(self.lib_plans), action)
+        self.lib_index = self.menu_index
+        if action == CONFIRM:
+            self.lib_preview_index = 0
+            self.state = "library_preview"
+
+    def draw_library_systems(self) -> None:
+        self._title("LIBRARY (1G1R)")
+        self._text(self.f_small,
+                   "USA > World > Europe > Japan  -  latest rev  -  hides extras in gamelist",
+                   int(self.H * 0.20), color=DIM)
+        if not self.lib_plans:
+            self._text(self.f_mid, "No 1G1R duplicates found.", int(self.H * 0.45), color=GREEN)
+            self._hint(["Esc/B: back"])
+            return
+        for label, xf, al in self.LIB_COLS:
+            self._cell(self.f_small, label, int(self.W * xf), int(self.H * 0.26), DIM, al)
+
+        rows = self.lib_plans
+        max_rows = 11
+        idx = self.lib_index
+        top = int(self.H * 0.32)
+        start = max(0, min(idx - max_rows // 2, max(0, len(rows) - max_rows)))
+        visible = rows[start:start + max_rows]
+        px, pw = int(self.W * 0.05), int(self.W * 0.92)
+        pad = int(10 * self.s)
+        pygame.draw.rect(self.screen, PANEL, (px, top - pad, pw, len(visible) * self.row_h + pad * 2))
+        for i, p in enumerate(visible):
+            real = start + i
+            y = top + i * self.row_h
+            sel = (real == idx)
+            if sel:
+                pygame.draw.rect(self.screen, SELECT_BG, (px + 6, y - 4, pw - 12, self.row_h))
+            color = GREEN if sel else WHITE
+            total = p.n_keep + len(p.hide)
+            cells = [p.system, str(total), str(len(p.hide)), str(p.n_skipped)]
+            for (label, xf, al), val in zip(self.LIB_COLS, cells):
+                self._cell(self.f_small, val, int(self.W * xf), y, color, al)
+        self._text(self.f_small, f"{start + 1}-{start + len(visible)} of {len(rows)}",
+                   int(self.H * 0.90), color=DIM)
+        self._hint(["Up/Down: scroll", "Enter/A: preview", "Esc/B: back"])
+
+    def on_library_preview(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "library_systems", self.lib_index
+            return
+        p = self.lib_plans[self.lib_index]
+        if action in (UP, DOWN) and p.hide:
+            n = len(p.hide)
+            self.lib_preview_index = (self.lib_preview_index + (1 if action == DOWN else -1)) % n
+        elif action == CONFIRM and p.hide:
+            self.state = "library_confirm"
+
+    def draw_library_preview(self) -> None:
+        p = self.lib_plans[self.lib_index]
+        self._title("1G1R PREVIEW")
+        extra = []
+        if p.n_skipped:
+            extra.append(f"{p.n_skipped} skipped (ambiguous)")
+        if p.fav_protected:
+            extra.append(f"{p.fav_protected} favorites kept")
+        tail = ("  -  " + "  -  ".join(extra)) if extra else ""
+        self._text(self.f_small,
+                   f"{p.system}:  hide {len(p.hide)}  -  keep {p.n_keep}{tail}",
+                   int(self.H * 0.20), color=TEAL)
+        self._text(self.f_small, "these variants will be HIDDEN (files untouched, reversible):",
+                   int(self.H * 0.26), color=DIM)
+
+        names = [os.path.basename(h) for h in p.hide]
+        max_rows = 10
+        idx = self.lib_preview_index
+        top = int(self.H * 0.32)
+        start = max(0, min(idx - max_rows // 2, max(0, len(names) - max_rows)))
+        visible = names[start:start + max_rows]
+        m = self._m
+        px = m + int(22 * self.s)
+        for i, name in enumerate(visible):
+            real = start + i
+            y = top + i * self.row_h
+            sel = (real == idx)
+            if sel:
+                pygame.draw.rect(self.screen, SELECT_BG,
+                                 (px - int(10 * self.s), y - int(2 * self.s),
+                                  self.W - 2 * m - int(40 * self.s), self.row_h))
+            color = GREEN if sel else WHITE
+            surf = self.f_small.render(("> " if sel else "  ") + name, True, color)
+            self.screen.blit(surf, (px, y))
+        if names:
+            self._text(self.f_small, f"{start + 1}-{start + len(visible)} of {len(names)}",
+                       int(self.H * 0.90), color=DIM)
+        self._hint(["Up/Down: scroll", "Enter/A: apply", "Esc/B: back"])
+
+    def on_library_confirm(self, action: str) -> None:
+        if action == CONFIRM:
+            self.lib_apply_done = False
+            self.lib_result = None
+            self._worker = threading.Thread(target=self._library_apply_thread, daemon=True)
+            self._worker.start()
+            self.state = "library_progress"
+        elif action == BACK:
+            self.state = "library_preview"
+
+    def draw_library_confirm(self) -> None:
+        p = self.lib_plans[self.lib_index]
+        self._title("CONFIRM 1G1R")
+        self._text(self.f_mid, f"Hide {len(p.hide)} redundant variants in {p.system}?",
+                   int(self.H * 0.40), color=WHITE)
+        self._text(self.f_small, "A gamelist backup is written first.", int(self.H * 0.50), color=PINK)
+        self._text(self.f_small, "Additive + reversible; Favorites are never hidden.",
+                   int(self.H * 0.57), color=DIM)
+        self._hint(["Enter/A: hide them", "Esc/B: back"])
+
+    def _library_apply_thread(self) -> None:
+        p = self.lib_plans[self.lib_index]
+        self.lib_result = library.apply_hides(p.system, p.hide)
+        self.lib_apply_done = True
+
+    def draw_library_progress(self) -> None:
+        self._title("APPLYING 1G1R")
+        self._text(self.f_mid, f"Hiding variants in {self.lib_plans[self.lib_index].system}...",
+                   int(self.H * 0.45), color=GREEN)
+        self._hint(["please wait..."])
+
+    # ===================================================================
     # SHADERS: pick system -> browse preset tree
     # ===================================================================
     def on_shaders_systems(self, action: str) -> None:
@@ -728,6 +891,22 @@ class App:
             else:
                 self._flash("Restore failed to start", "main")
             self.rs_done = False
+        elif self.state == "library_loading" and self.lib_done:
+            self.state, self.menu_index, self.lib_index = "library_systems", 0, 0
+            self.lib_done = False
+            if not self.lib_plans:
+                self._flash("No 1G1R duplicates found.", "main",
+                            "eligible systems are already deduped")
+        elif self.state == "library_progress" and self.lib_apply_done:
+            r = self.lib_result
+            sysname = self.lib_plans[self.lib_index].system
+            if r:
+                sub = (f"{r.fav_protected} favorites kept  -  un-hide in ES to revert"
+                       if r.fav_protected else "un-hide in ES to revert")
+                self._flash(f"{sysname}: hid {r.hidden} variants", "main", sub)
+            else:
+                self._flash("1G1R apply failed", "main")
+            self.lib_apply_done = False
 
     # ===================================================================
     # DRAW PRIMITIVES
