@@ -1237,7 +1237,7 @@ class App:
     def _clip(self, text: str, font, avail_px: int) -> str:
         cw = max(1, font.size("M")[0])
         maxc = max(1, avail_px // cw)
-        return text if len(text) <= maxc else text[:maxc - 1] + "..."
+        return text if len(text) <= maxc else text[:max(1, maxc - 3)] + "..."
 
     def _open_log(self, lf) -> None:
         self.log_detail_name = lf.name

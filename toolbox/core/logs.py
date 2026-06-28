@@ -53,7 +53,7 @@ class LastLaunch:
     errors: list = field(default_factory=list)
 
 
-def list_logs() -> list:
+def list_logs() -> list[LogFile]:
     """Every regular file in LOG_DIR, newest (mtime) first. Dirs are skipped."""
     out: list = []
     try:
@@ -72,7 +72,7 @@ def list_logs() -> list:
     return out
 
 
-def tail(path, n: int = 200, max_bytes: int = 131072) -> list:
+def tail(path, n: int = 200, max_bytes: int = 131072) -> list[str]:
     """Last `n` lines, reading at most the trailing `max_bytes` so a huge log
     (e.g. a 16MB backup.log) never loads whole. [] if unreadable."""
     try:
@@ -90,7 +90,7 @@ def tail(path, n: int = 200, max_bytes: int = 131072) -> list:
     return lines[-n:]
 
 
-def read_launch_logs() -> tuple:
+def read_launch_logs() -> tuple[str, str]:
     """(stdout_text, stderr_text) for the ES launch logs; "" when absent."""
     d = LOG_DIR()
 
@@ -117,19 +117,30 @@ def _collect_errors(stdout_after: str, stderr_text: str) -> list:
     return out
 
 
-def parse_last_launch(stdout_text: str, stderr_text: str = "") -> LastLaunch | None:
-    """Summarize the most recent launch in the ES stdout log, or None if there
-    isn't one. The exit status is the first `Exiting configgen with status` that
-    follows the last `gameStart`; its absence means the run never returned
-    cleanly (a hang or hard crash)."""
+def parse_last_launch(stdout_text: str, stderr_text: str = "",
+                      ignore_basename: str = "Toolbox.sh") -> LastLaunch | None:
+    """Summarize the most recent *game* launch in the ES stdout log, or None.
+
+    The Toolbox is itself a Port, so its own `gameStart` (`Toolbox.sh`) is always
+    the last marker in the log while you're reading this; `ignore_basename` skips
+    it so the card reports the game you launched *before* opening the viewer.
+    Status/errors are scoped to that launch's window (up to the next `gameStart`):
+    a missing status means the run never returned cleanly (a hang or hard crash).
+    """
     matches = list(_GAMESTART.finditer(stdout_text))
-    if not matches:
+    chosen = None
+    for i in range(len(matches) - 1, -1, -1):
+        if os.path.basename(matches[i].group(4)) != ignore_basename:
+            chosen = i
+            break
+    if chosen is None:
         return None
-    m = matches[-1]
+    m = matches[chosen]
     system, emulator, core, rompath = m.group(1), m.group(2), m.group(3), m.group(4)
     game = os.path.basename(rompath) or rompath
-    after = stdout_text[m.end():]
-    sm = _STATUS.search(after)
+    end = matches[chosen + 1].start() if chosen + 1 < len(matches) else len(stdout_text)
+    window = stdout_text[m.end():end]
+    sm = _STATUS.search(window)
     status = int(sm.group(1)) if sm else None
     if status == 0:
         verdict = "clean exit (0)"
@@ -137,6 +148,8 @@ def parse_last_launch(stdout_text: str, stderr_text: str = "") -> LastLaunch | N
         verdict = f"FAILED (exit {status})"
     else:
         verdict = "no clean exit recorded (hang or hard crash?)"
+    # stdout errors are scoped to this launch's window; stderr is the whole file
+    # (small, single-session) so a crash's traceback still surfaces.
     return LastLaunch(game=game, system=system, emulator=emulator, core=core,
                       status=status, verdict=verdict,
-                      errors=_collect_errors(after, stderr_text))
+                      errors=_collect_errors(window, stderr_text))

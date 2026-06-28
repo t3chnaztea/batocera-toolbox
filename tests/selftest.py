@@ -668,6 +668,21 @@ def test_logs(tmp: Path) -> None:
 
     check("logs none when no gameStart", logs.parse_last_launch("nothing") is None)
 
+    # the Toolbox is itself a Port: its own gameStart is always last, so the
+    # card must skip it and report the game launched before the viewer.
+    self_after = (clean.replace("status 0", "status 1") +
+                  "'gameStart', 'ports', 'sh', 'sh', "
+                  "PosixPath('/userdata/roms/ports/Toolbox.sh')]\n"
+                  "launch Exiting configgen with status 0\n")
+    ll = logs.parse_last_launch(self_after)
+    check("logs skips the Toolbox's own launch", ll.game == "Zelda (USA).sfc")
+    check("logs reports the prior game's failed status", ll.verdict == "FAILED (exit 1)")
+    only_self = ("'gameStart', 'ports', 'sh', 'sh', "
+                 "PosixPath('/userdata/roms/ports/Toolbox.sh')]\n"
+                 "launch Exiting configgen with status 0\n")
+    check("logs None when only the Toolbox has launched",
+          logs.parse_last_launch(only_self) is None)
+
     # list_logs: 2 files + 1 subdir, newest mtime first
     (ldir / "a.log").write_text("aaa")
     (ldir / "b.log").write_text("bbb")
