@@ -121,6 +121,15 @@ def test_audit(tmp: Path) -> None:
     check("psx cue/bin counts as 1 game", psx.games == 1)
     check("psx unscraped 0%", psx.scraped_pct == 0)
 
+    # Progress callback: fired once per system (done<total) plus a final
+    # (total,total,"") tick, so the loading screen can draw a real bar.
+    calls: list = []
+    audit.audit_systems(on_progress=lambda d, t, n: calls.append((d, t, n)))
+    n_sys = len(config.list_systems())
+    check("on_progress fires per system + final tick", len(calls) == n_sys + 1)
+    check("on_progress totals are stable", all(t == n_sys for _, t, _ in calls))
+    check("on_progress final tick is (total,total,'')", calls[-1] == (n_sys, n_sys, ""))
+
 
 def test_backup(tmp: Path) -> None:
     from toolbox.core import backup

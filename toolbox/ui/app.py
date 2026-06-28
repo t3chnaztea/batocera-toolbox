@@ -92,7 +92,12 @@ class App:
         self.audit_rows: list[audit.SystemAudit] = []
         self.audit_done = False
         self.audit_index = 0
+        self.audit_prog = (0, 0, "")     # (done, total, system) for the loading bar
         self._worker: threading.Thread | None = None
+        # Set by any worker that raises; surfaced (not swallowed) by _poll_workers
+        # so a crashed job shows an error and returns to the menu instead of
+        # leaving the loading screen frozen forever.
+        self.worker_error = ""
 
         # shader state
         self.sh_presets: list[str] = []
@@ -129,6 +134,7 @@ class App:
         self.lib_preview_index = 0       # scroll position in the hide preview
         self.lib_result: library.ApplyResult | None = None
         self.lib_apply_done = False
+        self.lib_apply_mode = "one"      # "one" (single system) or "all"
 
         # performance state
         self.perf_conf = ""
@@ -153,6 +159,8 @@ class App:
                 action = self.input.translate(event)
                 if action == QUIT:
                     self.running = False
+                elif action == BACK and self.state in self.CANCELLABLE_LOADING:
+                    self._cancel_loading()
                 elif action:
                     getattr(self, f"on_{self.state}", lambda a: None)(action)
             self._poll_workers()
@@ -169,6 +177,45 @@ class App:
     def _flash(self, text: str, nxt: str, sub: str = "") -> None:
         self.msg, self.msg_sub, self.msg_next = text, sub, nxt
         self.state = "message"
+
+    # Read-only loads: BACK abandons the (harmless) daemon worker and returns to
+    # the menu. NOT the write-progress screens (backup/restore/library apply),
+    # where bailing would orphan a running rsync mid-write.
+    CANCELLABLE_LOADING = {"audit_loading", "bios_loading", "restore_loading",
+                           "library_loading", "cheevos_loading"}
+
+    # Done-flag attribute for every worker, cleared together on cancel/error so a
+    # stale flag can't immediately re-trigger _poll_workers after we bail out.
+    _DONE_FLAGS = ("audit_done", "bios_done", "rs_listed", "lib_done", "ch_done",
+                   "bk_done", "rs_done", "lib_apply_done")
+
+    def _clear_done_flags(self) -> None:
+        for attr in self._DONE_FLAGS:
+            setattr(self, attr, False)
+
+    def _cancel_loading(self) -> None:
+        self.worker_error = ""
+        self._clear_done_flags()
+        self.state, self.menu_index = "main", 0
+
+    def _spawn(self, target, done_attr: str) -> None:
+        """Run a worker body on a daemon thread, capturing any exception.
+
+        On an unhandled error we record it AND still set the done flag, so the
+        main loop leaves the loading screen (showing the error) instead of
+        hanging on "please wait" forever — the exact trap that froze the audit.
+        """
+        self.worker_error = ""
+
+        def runner() -> None:
+            try:
+                target()
+            except Exception as e:                       # surface, never freeze
+                self.worker_error = f"{type(e).__name__}: {e}"
+                setattr(self, done_attr, True)
+
+        self._worker = threading.Thread(target=runner, daemon=True)
+        self._worker.start()
 
     # ===================================================================
     # MAIN MENU
@@ -198,8 +245,8 @@ class App:
         self.audit_done = False
         self.audit_rows = []
         self.audit_index = 0
-        self._worker = threading.Thread(target=self._audit_thread, daemon=True)
-        self._worker.start()
+        self.audit_prog = (0, 0, "")
+        self._spawn(self._audit_thread, "audit_done")
         self.state = "audit_loading"
 
     def _enter_shaders(self) -> None:
@@ -214,8 +261,7 @@ class App:
         self.bios_all = []
         self.bios_rows = []
         self.bios_index = 0
-        self._worker = threading.Thread(target=self._bios_thread, daemon=True)
-        self._worker.start()
+        self._spawn(self._bios_thread, "bios_done")
         self.state = "bios_loading"
 
     def _enter_restore(self) -> None:
@@ -225,16 +271,14 @@ class App:
             return
         self.rs_listed = False
         self.rs_cats = []
-        self._worker = threading.Thread(target=self._restore_list_thread, daemon=True)
-        self._worker.start()
+        self._spawn(self._restore_list_thread, "rs_listed")
         self.state = "restore_loading"
 
     def _enter_library(self) -> None:
         self.lib_plans = []
         self.lib_done = False
         self.lib_index = 0
-        self._worker = threading.Thread(target=self._library_thread, daemon=True)
-        self._worker.start()
+        self._spawn(self._library_thread, "lib_done")
         self.state = "library_loading"
 
     def _enter_perf(self) -> None:
@@ -253,8 +297,7 @@ class App:
         self.ch_summary = None
         self.ch_recent = None
         self.ch_index = 0
-        self._worker = threading.Thread(target=self._cheevos_thread, daemon=True)
-        self._worker.start()
+        self._spawn(self._cheevos_thread, "ch_done")
         self.state = "cheevos_loading"
 
     def _enter_ctlsetup(self) -> None:
@@ -330,8 +373,7 @@ class App:
             self.bk_done = False
             self.bk_result = None
             self.bk_leg, self.bk_pct = "", 0
-            self._worker = threading.Thread(target=self._backup_thread, daemon=True)
-            self._worker.start()
+            self._spawn(self._backup_thread, "bk_done")
             self.state = "backup_progress"
         elif action == BACK:
             self.state = "backup"
@@ -364,14 +406,21 @@ class App:
     # AUDIT
     # ===================================================================
     def _audit_thread(self) -> None:
+        def cb(done: int, total: int, name: str) -> None:
+            self.audit_prog = (done, total, name)
         # Drop empty systems (0 games) from the dashboard: no roms, nothing to show.
-        self.audit_rows = [r for r in audit.audit_systems() if r.games > 0]
+        rows = audit.audit_systems(on_progress=cb)
+        self.audit_rows = [r for r in rows if r.games > 0]
         self.audit_done = True
 
     def draw_audit_loading(self) -> None:
         self._title("ROM AUDIT")
-        self._text(self.f_mid, "Auditing the ROM library...", int(self.H * 0.45), color=TEAL)
-        self._hint(["please wait..."])
+        done, total, name = self.audit_prog
+        self._text(self.f_mid, "Auditing the ROM library...", int(self.H * 0.34), color=TEAL)
+        label = f"{done}/{total}   {name}" if total else "starting..."
+        self._text(self.f_small, label, int(self.H * 0.46), color=WHITE)
+        self._bar(done * 100 // total if total else 0, int(self.H * 0.54))
+        self._hint(["Esc/B: cancel"])
 
     def on_audit(self, action: str) -> None:
         if action == BACK:
@@ -396,7 +445,7 @@ class App:
             self._cell(self.f_small, label, int(self.W * xf), int(self.H * 0.21), DIM, al)
 
         rows = self.audit_rows
-        max_rows = 12
+        max_rows = 11
         idx = self.audit_index
         top = int(self.H * 0.27)
         start = max(0, min(idx - max_rows // 2, max(0, len(rows) - max_rows)))
@@ -453,7 +502,7 @@ class App:
         self._title("BIOS CHECK")
         self._text(self.f_mid, "Checking BIOS against the OS manifest...",
                    int(self.H * 0.45), color=TEAL)
-        self._hint(["please wait..."])
+        self._hint(["Esc/B: cancel"])
 
     def on_bios(self, action: str) -> None:
         if action == BACK:
@@ -561,7 +610,7 @@ class App:
         self._title("RESTORE")
         self._text(self.f_mid, "Looking for backups on the NAS...",
                    int(self.H * 0.45), color=TEAL)
-        self._hint(["please wait..."])
+        self._hint(["Esc/B: cancel"])
 
     def on_restore(self, action: str) -> None:
         if action == BACK:
@@ -598,8 +647,7 @@ class App:
             self.rs_done = False
             self.rs_result = None
             self.rs_leg, self.rs_pct = "", 0
-            self._worker = threading.Thread(target=self._restore_thread, daemon=True)
-            self._worker.start()
+            self._spawn(self._restore_thread, "rs_done")
             self.state = "restore_progress"
         elif action == BACK:
             self.state = "restore"
@@ -646,7 +694,7 @@ class App:
         self._title("LIBRARY (1G1R)")
         self._text(self.f_mid, "Scanning gamelists for duplicate variants...",
                    int(self.H * 0.45), color=TEAL)
-        self._hint(["please wait..."])
+        self._hint(["Esc/B: cancel"])
 
     LIB_COLS = [("SYSTEM", 0.09, "l"), ("GAMES", 0.55, "r"),
                 ("TO HIDE", 0.76, "r"), ("SKIPPED", 0.95, "r")]
@@ -656,6 +704,9 @@ class App:
             self.state, self.menu_index = "main", 0
             return
         if not self.lib_plans:
+            return
+        if action == SELECT:
+            self.state = "library_confirm_all"
             return
         self._move(len(self.lib_plans), action)
         self.lib_index = self.menu_index
@@ -697,7 +748,7 @@ class App:
                 self._cell(self.f_small, val, int(self.W * xf), y, color, al)
         self._text(self.f_small, f"{start + 1}-{start + len(visible)} of {len(rows)}",
                    int(self.H * 0.90), color=DIM)
-        self._hint(["Up/Down: scroll", "Enter/A: preview", "Esc/B: back"])
+        self._hint(["Up/Down: scroll", "Enter/A: preview", "X: apply ALL", "Esc/B: back"])
 
     def on_library_preview(self, action: str) -> None:
         if action == BACK:
@@ -751,10 +802,10 @@ class App:
 
     def on_library_confirm(self, action: str) -> None:
         if action == CONFIRM:
+            self.lib_apply_mode = "one"
             self.lib_apply_done = False
             self.lib_result = None
-            self._worker = threading.Thread(target=self._library_apply_thread, daemon=True)
-            self._worker.start()
+            self._spawn(self._library_apply_thread, "lib_apply_done")
             self.state = "library_progress"
         elif action == BACK:
             self.state = "library_preview"
@@ -774,10 +825,47 @@ class App:
         self.lib_result = library.apply_hides(p.system, p.hide)
         self.lib_apply_done = True
 
+    # --- Apply ALL systems in one pass --------------------------------------
+    def on_library_confirm_all(self, action: str) -> None:
+        if action == CONFIRM:
+            self.lib_apply_mode = "all"
+            self.lib_apply_done = False
+            self.lib_result = None
+            self._spawn(self._library_apply_all_thread, "lib_apply_done")
+            self.state = "library_progress"
+        elif action == BACK:
+            self.state = "library_systems"
+
+    def draw_library_confirm_all(self) -> None:
+        self._title("CONFIRM 1G1R (ALL)")
+        n_sys = len(self.lib_plans)
+        total = sum(len(p.hide) for p in self.lib_plans)
+        self._text(self.f_mid, f"Hide {total} variants across {n_sys} systems?",
+                   int(self.H * 0.40), color=WHITE)
+        self._text(self.f_small, "A gamelist backup is written per system first.",
+                   int(self.H * 0.50), color=PINK)
+        self._text(self.f_small, "Additive + reversible; Favorites are never hidden.",
+                   int(self.H * 0.57), color=DIM)
+        self._hint(["Enter/A: hide them all", "Esc/B: back"])
+
+    def _library_apply_all_thread(self) -> None:
+        agg = library.ApplyResult()
+        for p in self.lib_plans:
+            if not p.hide:
+                continue
+            r = library.apply_hides(p.system, p.hide)
+            agg.hidden += r.hidden
+            agg.fav_protected += r.fav_protected
+        self.lib_result = agg
+        self.lib_apply_done = True
+
     def draw_library_progress(self) -> None:
         self._title("APPLYING 1G1R")
-        self._text(self.f_mid, f"Hiding variants in {self.lib_plans[self.lib_index].system}...",
-                   int(self.H * 0.45), color=GREEN)
+        if self.lib_apply_mode == "all":
+            msg = f"Hiding variants across {len(self.lib_plans)} systems..."
+        else:
+            msg = f"Hiding variants in {self.lib_plans[self.lib_index].system}..."
+        self._text(self.f_mid, msg, int(self.H * 0.45), color=GREEN)
         self._hint(["please wait..."])
 
     # ===================================================================
@@ -859,7 +947,7 @@ class App:
     def draw_cheevos_loading(self) -> None:
         self._title("RETROACHIEVEMENTS")
         self._text(self.f_mid, "Fetching your profile...", int(self.H * 0.45), color=TEAL)
-        self._hint(["please wait..."])
+        self._hint(["Esc/B: cancel"])
 
     def on_cheevos(self, action: str) -> None:
         if action == BACK:
@@ -1015,6 +1103,14 @@ class App:
     # WORKER POLLING (main thread reacts to finished jobs)
     # ===================================================================
     def _poll_workers(self) -> None:
+        if self.worker_error:
+            # A worker raised instead of finishing: show it and bail to the menu,
+            # never sit on a frozen loading screen.
+            err = self.worker_error
+            self.worker_error = ""
+            self._clear_done_flags()
+            self._flash("Operation failed (not frozen)", "main", err)
+            return
         if self.state == "backup_progress" and self.bk_done:
             r = self.bk_result
             if r and r.failed == 0:
@@ -1061,14 +1157,28 @@ class App:
             self.ch_done = False
         elif self.state == "library_progress" and self.lib_apply_done:
             r = self.lib_result
-            sysname = self.lib_plans[self.lib_index].system
-            if r:
+            self.lib_apply_done = False
+            if not r:
+                self._flash("1G1R apply failed", "main")
+            elif self.lib_apply_mode == "all":
+                # Every plan is done: drop them all, return to the menu.
+                n_sys = len(self.lib_plans)
+                self.lib_plans = []
                 sub = (f"{r.fav_protected} favorites kept  -  un-hide in ES to revert"
                        if r.fav_protected else "un-hide in ES to revert")
-                self._flash(f"{sysname}: hid {r.hidden} variants", "main", sub)
+                self._flash(f"Hid {r.hidden} variants across {n_sys} systems", "main", sub)
             else:
-                self._flash("1G1R apply failed", "main")
-            self.lib_apply_done = False
+                # Single system done: remove its (now-stale) plan and stay in the
+                # list so the next system is one keypress away, not a re-launch.
+                sysname = self.lib_plans[self.lib_index].system
+                del self.lib_plans[self.lib_index]
+                self.lib_index = 0
+                sub = (f"{r.fav_protected} favorites kept  -  un-hide in ES to revert"
+                       if r.fav_protected else "un-hide in ES to revert")
+                nxt = "library_systems" if self.lib_plans else "main"
+                if not self.lib_plans:
+                    sub = "all eligible systems deduped"
+                self._flash(f"{sysname}: hid {r.hidden} variants", nxt, sub)
 
     # ===================================================================
     # DRAW PRIMITIVES

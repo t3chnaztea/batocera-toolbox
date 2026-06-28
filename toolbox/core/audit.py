@@ -114,7 +114,22 @@ def audit_system(system: str) -> SystemAudit:
     return a
 
 
-def audit_systems(systems: list[str] | None = None) -> list[SystemAudit]:
-    """Audit every system (or a given subset). Sorted by system name."""
-    names = systems if systems is not None else config.list_systems()
-    return [audit_system(s) for s in sorted(names)]
+def audit_systems(systems: list[str] | None = None,
+                  on_progress=None) -> list[SystemAudit]:
+    """Audit every system (or a given subset). Sorted by system name.
+
+    ``on_progress(done, total, system)`` is called before each system (and once
+    more at the end with ``done == total`` and an empty name) so a UI can render
+    a live progress bar instead of an opaque "please wait". Optional; pure when
+    omitted.
+    """
+    names = sorted(systems if systems is not None else config.list_systems())
+    total = len(names)
+    out: list[SystemAudit] = []
+    for i, s in enumerate(names):
+        if on_progress is not None:
+            on_progress(i, total, s)
+        out.append(audit_system(s))
+    if on_progress is not None:
+        on_progress(total, total, "")
+    return out

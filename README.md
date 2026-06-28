@@ -1,5 +1,10 @@
 # Batocera Toolbox
 
+> **Unofficial.** A community-made add-on, not affiliated with, endorsed by, or
+> supported by the [Batocera](https://batocera.org) project or its maintainers.
+> It runs *on top of* Batocera; "Batocera" is their project's name. Report
+> Toolbox issues here, not to the Batocera team.
+
 A couch-friendly, gamepad-driven utility **Port** for [Batocera](https://batocera.org).
 One app, nine modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
 **Shaders**, **Library (1G1R)**, **Performance**, **RetroAchievements**, and
@@ -43,9 +48,9 @@ Two design choices keep it trustworthy:
 |---|---|---|
 | ![Library systems](screenshots/09-library-systems.png) | ![1G1R preview](screenshots/10-library-preview.png) | ![Controller setup](screenshots/08-controller-setup.png) |
 
-| Performance | RetroAchievements |
-|---|---|
-| ![Performance](screenshots/12-performance.png) | ![RetroAchievements](screenshots/13-retroachievements.png) |
+| Performance | RetroAchievements | 1G1R apply all |
+|---|---|---|
+| ![Performance](screenshots/12-performance.png) | ![RetroAchievements](screenshots/13-retroachievements.png) | ![1G1R apply all](screenshots/11-library-confirm-all.png) |
 
 ## Modules
 
@@ -68,7 +73,10 @@ previews. See [Configuration](#configuration) to point it at your server.
 ### ROM Audit
 Fast, read-only dashboard. Per system: ROM count, scraped %, missing artwork,
 gamelist orphans/duplicates, same-name dup count. Reads the live tree +
-`gamelist.xml` only — it does not hash or verify against DATs.
+`gamelist.xml` only — it does not hash or verify against DATs. The scan shows a
+live `N/total` progress bar and `Esc`/`B` cancels it back to the menu; read-only
+scans (audit/BIOS/restore-list/library) all run on a crash-safe worker that
+surfaces an error screen instead of hanging if something goes wrong.
 
 ### BIOS Check
 Reports which BIOS files are missing/invalid per system, so "why won't this game
@@ -112,7 +120,11 @@ winner candidacy (`Unl` is kept: often the only copy). Multi-disc winners keep
 
 Per-system flow: pick a system (the picker shows eligible systems with a
 `GAMES / TO HIDE / SKIPPED` count) -> scroll the exact list of variants that will
-be hidden -> confirm. **Guards (always on):** additive only (it only ever *adds*
+be hidden -> confirm. Applying one system **returns to the systems list** (that
+system drops off, since it's now deduped) rather than exiting, so you can work
+through several in a row. `X` on the systems list is **apply ALL**: one confirm
+dedupes every eligible system in a single pass (a per-system gamelist backup is
+still written for each). **Guards (always on):** additive only (it only ever *adds*
 `hidden`, never un-hides, so manual curation is preserved); never hides a
 **Favorite**; **skips** groups with an ambiguous winner (true tie, no tiebreak),
 leaving them visible and counted; **arcade families excluded entirely**
@@ -223,7 +235,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 153 assertions, no pygame/network needed
+python3 tests/selftest.py      # 156 assertions, no pygame/network needed
 ```
 
 ## License
