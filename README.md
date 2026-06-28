@@ -174,6 +174,10 @@ description, and (in an interactive shell) runs a short onboarding wizard
 (optional backup target + the bezel fix below). No `git` needed; Batocera
 already ships Python, pygame, rsync, curl, and whiptail.
 
+As with any `curl | bash` installer, this runs as root and trusts this repo
+(it pulls the current `main`). Read [`install.sh`](install.sh) first if you'd
+rather not, or clone the repo and run it locally.
+
 Lifecycle -- the same one-liner with a flag:
 
 ```bash
@@ -244,7 +248,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 156 assertions, no pygame/network needed
+python3 tests/selftest.py      # 172 assertions, no pygame/network needed
 ```
 
 ## License
