@@ -590,6 +590,34 @@ def test_portmeta(tmp: Path) -> None:
     check("portmeta --remove drops Toolbox", "./Toolbox.sh" not in paths)
     check("portmeta --remove keeps other ports", "./Switch Updater.sh" in paths)
 
+    # 5) retention cap: prune keeps only the newest N backups (test the helper
+    # directly with distinct stamped names, in a fresh dir for isolation).
+    pdir = tmp / "portmeta-prune"
+    pdir.mkdir(parents=True, exist_ok=True)
+    target = pdir / "gamelist.xml"
+    for i in range(8):
+        (pdir / f"gamelist.xml.bak-toolbox-2026010{i}-000000").write_text("x")
+    portmeta.prune_backups(target, keep=5)
+    kept = sorted(p.name for p in pdir.glob("gamelist.xml.bak-toolbox-*"))
+    check("prune keeps exactly N=5 backups", len(kept) == 5)
+    check("prune keeps the newest backup", kept[-1].endswith("20260107-000000"))
+    check("prune drops the oldest backup",
+          not any("20260100-000000" in k for k in kept))
+
+    # 6) remove on an absent entry is a no-op: no backup, no error.
+    fresh = tmp / "portmeta-absent" / "gamelist.xml"
+    fresh.parent.mkdir(parents=True, exist_ok=True)
+    portmeta.merge_port_entry(fresh)                      # create with Toolbox
+    n_before = len(list(fresh.parent.glob("*.bak-toolbox-*")))
+    portmeta.merge_port_entry(fresh, sh_relpath="./Nope.sh", remove=True)
+    check("portmeta remove-absent writes no backup",
+          len(list(fresh.parent.glob("*.bak-toolbox-*"))) == n_before)
+
+    # 7) atomic write leaves no stray temp file behind.
+    portmeta.merge_port_entry(fresh)
+    check("portmeta leaves no .tmp-toolbox file",
+          not list(fresh.parent.glob("*.tmp-toolbox")))
+
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:

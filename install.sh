@@ -16,11 +16,14 @@
 set -euo pipefail
 
 REPO="t3chnaztea/batocera-toolbox"
-BRANCH="main"
+# Pinned to a release tag for reproducible installs; override with
+# TOOLBOX_REF=main (or another tag) for the rolling/latest payload.
+REF="${TOOLBOX_REF:-v0.2.0}"
 PORTS="/userdata/roms/ports"
 STATE="/userdata/saves/ports/toolbox"
 CONF="/userdata/system/batocera.conf"
-TARBALL="https://github.com/${REPO}/archive/refs/heads/${BRANCH}.tar.gz"
+# Short archive form resolves both tags (refs/tags) and branches (refs/heads).
+TARBALL="https://github.com/${REPO}/archive/${REF}.tar.gz"
 
 SRC=""
 CLEANUP=""
@@ -39,7 +42,7 @@ have_tty() { (exec 3<>/dev/tty) 2>/dev/null; }
 usage() {
   cat >&2 <<USAGE
 Batocera Toolbox installer
-  on the box:   curl -fsSL https://raw.githubusercontent.com/${REPO}/${BRANCH}/install.sh | bash
+  on the box:   curl -fsSL https://raw.githubusercontent.com/${REPO}/${REF}/install.sh | bash
   from laptop:  $0 <batocera-ip> [ssh-user]
   lifecycle:    $0 --update | --uninstall [--purge] | --config
 USAGE
@@ -54,9 +57,10 @@ resolve_src() {
     return
   fi
   CLEANUP="$(mktemp -d)"
-  say "Downloading ${REPO} (${BRANCH})..."
+  say "Downloading ${REPO} (${REF})..."
   curl -fsSL "$TARBALL" | tar -xz -C "$CLEANUP" || die "download/extract failed"
-  SRC="$CLEANUP/batocera-toolbox-${BRANCH}"
+  # GitHub strips a leading 'v' from tag archive dir names (v0.2.0 -> 0.2.0).
+  SRC="$CLEANUP/batocera-toolbox-${REF#v}"
   [ -d "$SRC/toolbox" ] || die "unexpected tarball layout"
 }
 
@@ -104,6 +108,13 @@ PY
 set_bezel_none() {
   [ -f "$CONF" ] || { say "no $CONF; skipping bezel tweak"; return; }
   cp "$CONF" "${CONF}.bak-toolbox-$(date +%Y%m%d-%H%M%S)"
+  # Keep only the newest 5 conf backups. Bash sorts glob results, and the
+  # YYYYMMDD-HHMMSS suffix sorts chronologically, so baks[0] is the oldest.
+  local baks=( "${CONF}".bak-toolbox-* )
+  if [ -e "${baks[0]}" ] && [ "${#baks[@]}" -gt 5 ]; then
+    local i
+    for ((i = 0; i < ${#baks[@]} - 5; i++)); do rm -f "${baks[i]}"; done
+  fi
   if grep -q '^ports.bezel=' "$CONF"; then
     sed -i 's/^ports.bezel=.*/ports.bezel=none/' "$CONF"
   else
