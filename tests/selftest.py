@@ -451,6 +451,85 @@ def test_library(tmp: Path) -> None:
           any(c.name.startswith("gamelist.xml.bak-toolbox-") for c in gen.iterdir()))
 
 
+def test_perf(tmp: Path) -> None:
+    from toolbox.core import perf
+    print("[perf]")
+
+    base = "snes.ratio=4/3\nglobal.bezel=thebezelproject\n"
+    check("get_key missing -> None", perf.get_key(base, "nes.runahead") is None)
+    check("get_key present", perf.get_key(base, "snes.ratio") == "4/3")
+    t = perf.set_key(base, "nes.runahead", "1")
+    check("set_key appends new", perf.get_key(t, "nes.runahead") == "1")
+    t = perf.set_key(t, "snes.ratio", "16/9")
+    check("set_key replaces existing", perf.get_key(t, "snes.ratio") == "16/9")
+    check("set_key leaves others intact", perf.get_key(t, "global.bezel") == "thebezelproject")
+    t2 = perf.remove_key(t, "nes.runahead")
+    check("remove_key drops the line", perf.get_key(t2, "nes.runahead") is None)
+    check("remove_key missing is a no-op", perf.remove_key(base, "x.y") == base)
+
+    on = perf.set_runahead("", "nes", True)
+    check("runahead on sets runahead=1", perf.get_key(on, "nes.runahead") == "1")
+    check("runahead on sets secondinstance=1", perf.get_key(on, "nes.secondinstance") == "1")
+    off = perf.set_runahead(on, "nes", False)
+    check("runahead off removes runahead", perf.get_key(off, "nes.runahead") is None)
+    check("runahead off removes secondinstance", perf.get_key(off, "nes.secondinstance") is None)
+
+    oc = perf.set_overclock("", "snes", True)
+    check("snes overclock uses overclock_superfx=200%",
+          perf.get_key(oc, "snes.overclock_superfx") == "200%")
+    oc3 = perf.set_overclock("", "3do", True)
+    check("3do overclock uses cpu_overclock with the documented value",
+          perf.get_key(oc3, "3do.cpu_overclock") == "2.0x (25.00Mhz)")
+    oc_off = perf.set_overclock(oc, "snes", False)
+    check("overclock off removes the key", perf.get_key(oc_off, "snes.overclock_superfx") is None)
+    raised = False
+    try:
+        perf.set_overclock("", "n64", True)
+    except (KeyError, ValueError):
+        raised = True
+    check("overclock on an unmapped system is rejected", raised)
+
+    conf = "nes.runahead=1\nnes.secondinstance=1\nsnes.overclock_superfx=200%\n"
+    ra = perf.read_runahead(conf)
+    check("read_runahead: nes on", ra.get("nes") is True)
+    check("read_runahead: snes off", ra.get("snes") is False)
+    ocs = perf.read_overclock(conf)
+    check("read_overclock: snes on", ocs.get("snes") is True)
+    check("read_overclock: 3do off", ocs.get("3do") is False)
+
+
+def test_cheevos(tmp: Path) -> None:
+    from toolbox.core import cheevos
+    print("[cheevos]")
+
+    conf = ("global.retroachievements=1\n"
+            "global.retroachievements.username=Player1\n"
+            "global.retroachievements.token=ABC123\n")
+    user, token = cheevos.read_creds(conf)
+    check("read_creds username", user == "Player1")
+    check("read_creds token", token == "ABC123")
+    check("enabled true", cheevos.enabled(conf) is True)
+    check("enabled false when key=0", cheevos.enabled("global.retroachievements=0\n") is False)
+    check("enabled false when absent", cheevos.enabled("") is False)
+
+    summary = cheevos.parse_summary(
+        {"Success": True, "User": "Player1", "Score": 12345, "SoftcoreScore": 678})
+    check("parse_summary points", summary["points"] == 12345)
+    check("parse_summary softcore", summary["softcore"] == 678)
+    check("parse_summary user", summary["user"] == "Player1")
+    check("parse_summary tolerates missing fields",
+          cheevos.parse_summary({"User": "x"}) == {"user": "x", "points": 0, "softcore": 0})
+
+    recent = cheevos.parse_recent([
+        {"Title": "The Walls", "GameTitle": "Pac-Man", "Points": 5, "Date": "2026-06-20 14:00:00"},
+        {"Title": "Cleared", "GameTitle": "Dig Dug", "Points": 10, "Date": "2026-06-19 09:30:00"},
+    ])
+    check("parse_recent count", len(recent) == 2)
+    check("parse_recent maps fields",
+          recent[0] == {"title": "The Walls", "game": "Pac-Man", "points": 5, "date": "2026-06-20 14:00:00"})
+    check("parse_recent empty -> []", cheevos.parse_recent([]) == [])
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -465,6 +544,8 @@ def main() -> int:
         test_bios(tmp)
         test_restore(tmp)
         test_library(tmp)
+        test_perf(tmp)
+        test_cheevos(tmp)
     print(f"\n{PASS} OK, {FAIL} NO")
     return 1 if FAIL else 0
 

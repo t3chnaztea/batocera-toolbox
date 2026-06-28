@@ -1,10 +1,10 @@
 # Batocera Toolbox
 
 A couch-friendly, gamepad-driven utility **Port** for [Batocera](https://batocera.org).
-One app, seven modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
-**Shaders**, **Library (1G1R)**, and **Controller setup**. It installs into the
-PORTS menu and runs entirely on the machine, so you maintain your cabinet from
-the couch instead of SSHing in.
+One app, nine modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
+**Shaders**, **Library (1G1R)**, **Performance**, **RetroAchievements**, and
+**Controller setup**. It installs into the PORTS menu and runs entirely on the
+machine, so you maintain your cabinet from the couch instead of SSHing in.
 
 It uses a RetroArch RGUI look (phosphor green on near-black, double-line border,
 monospace), so it feels native next to the rest of Batocera.
@@ -42,6 +42,10 @@ Two design choices keep it trustworthy:
 | Library (1G1R) | 1G1R preview | Controller setup |
 |---|---|---|
 | ![Library systems](screenshots/09-library-systems.png) | ![1G1R preview](screenshots/10-library-preview.png) | ![Controller setup](screenshots/08-controller-setup.png) |
+
+| Performance | RetroAchievements |
+|---|---|
+| ![Performance](screenshots/12-performance.png) | ![RetroAchievements](screenshots/13-retroachievements.png) |
 
 ## Modules
 
@@ -116,6 +120,26 @@ leaving them visible and counted; **arcade families excluded entirely**
 `gamelist.xml.bak-toolbox-*` is written before the edit; un-hide in EmulationStation
 to revert. Read-only until you confirm; no files are ever moved or deleted.
 
+### Performance
+Per-system **run-ahead** and **overclock** toggles, the latency/speed knobs that
+otherwise live deep in the RetroArch menus. Run-ahead uses the uniform key pair
+(`<system>.runahead` + `.secondinstance`); overclock is offered only for systems
+with a verified key map (`3do.cpu_overclock`, `nes.fceumm_overclocking`,
+`snes.overclock_superfx`, `fbneo.fbneo-cpu-speed-adjust`) since each emulator
+spells it differently. `X` toggles a row in memory; `Enter` applies all staged
+changes at once, writing `batocera.conf` with a timestamped backup (same safety
+as Shaders). Changes take effect on the next game launch (no ES restart).
+
+### RetroAchievements
+Read-only profile view. Reads the username + connect token from `batocera.conf`
+and fetches a live summary (points / softcore) from RetroAchievements (a real
+`User-Agent` header is sent, or the endpoint returns 403). The richer
+recent-unlocks feed needs a separate **web API key** (from retroachievements.org
+→ Settings → Keys); drop it in `settings.json` as
+`retroachievements.web_api_key` and the view adds the unlock list. Network calls
+run on a worker thread with a short timeout; the JSON parsers are unit-tested.
+Writes nothing.
+
 ### Controller setup
 Keyboard always works (arrows / WASD, Enter = confirm, Esc = back, Space =
 select). For a gamepad, button numbering varies by device, so on first launch
@@ -184,6 +208,8 @@ toolbox/
       bios.py           version-aware BIOS check (parses batocera-systems)
       shaders.py        per-system renderer-path picker
       library.py        1G1R dedup: hide redundant variants in gamelist.xml
+      perf.py           per-system run-ahead + overclock toggles
+      cheevos.py        RetroAchievements profile view (read-only)
     ui/app.py           pygame state-machine UI (menu + all modules)
     ui/controls.py      keyboard + gamepad input, first-run button wizard
     assets/             bundled DejaVuSansMono.ttf
@@ -197,7 +223,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 122 assertions, no pygame/network needed
+python3 tests/selftest.py      # 153 assertions, no pygame/network needed
 ```
 
 ## License

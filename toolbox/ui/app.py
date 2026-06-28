@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pygame
 
-from ..core import config, backup, audit, shaders, bios, restore, library
+from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos
 from . import controls
 from .controls import UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, SELECT, QUIT
 
@@ -130,6 +130,19 @@ class App:
         self.lib_result: library.ApplyResult | None = None
         self.lib_apply_done = False
 
+        # performance state
+        self.perf_conf = ""
+        self.perf_rows: list[tuple[str, str]] = []   # (kind "ra"|"oc", system)
+        self.perf_state: dict[tuple[str, str], bool] = {}
+        self.perf_dirty = False
+
+        # retroachievements state
+        self.ch_done = False
+        self.ch_error = ""
+        self.ch_summary: dict | None = None
+        self.ch_recent: list | None = None
+        self.ch_index = 0
+
     # ===================================================================
     def run(self) -> None:
         while self.running:
@@ -163,6 +176,7 @@ class App:
     MAIN_ITEMS = [("Backup", "backup"), ("Restore", "restore"),
                   ("ROM Audit", "audit_run"), ("BIOS Check", "bios_run"),
                   ("Shaders", "shaders"), ("Library (1G1R)", "library"),
+                  ("Performance", "perf"), ("RetroAchievements", "cheevos"),
                   ("Controller setup", "ctlsetup"), ("Quit", "quit")]
 
     def on_main(self, action: str) -> None:
@@ -222,6 +236,26 @@ class App:
         self._worker = threading.Thread(target=self._library_thread, daemon=True)
         self._worker.start()
         self.state = "library_loading"
+
+    def _enter_perf(self) -> None:
+        self.perf_conf = perf.read_conf()
+        ra = perf.read_runahead(self.perf_conf)
+        oc = perf.read_overclock(self.perf_conf)
+        self.perf_rows = [("ra", s) for s in ra] + [("oc", s) for s in oc]
+        self.perf_state = {("ra", s): v for s, v in ra.items()}
+        self.perf_state.update({("oc", s): v for s, v in oc.items()})
+        self.perf_dirty = False
+        self.state, self.menu_index = "perf", 0
+
+    def _enter_cheevos(self) -> None:
+        self.ch_done = False
+        self.ch_error = ""
+        self.ch_summary = None
+        self.ch_recent = None
+        self.ch_index = 0
+        self._worker = threading.Thread(target=self._cheevos_thread, daemon=True)
+        self._worker.start()
+        self.state = "cheevos_loading"
 
     def _enter_ctlsetup(self) -> None:
         if not self.input.has_joystick():
@@ -747,6 +781,131 @@ class App:
         self._hint(["please wait..."])
 
     # ===================================================================
+    # PERFORMANCE: per-system run-ahead + overclock toggles
+    # ===================================================================
+    def on_perf(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "main", 0
+            return
+        if not self.perf_rows:
+            return
+        self._move(len(self.perf_rows), action)
+        if action == SELECT:
+            key = self.perf_rows[self.menu_index]
+            self.perf_state[key] = not self.perf_state[key]
+            self.perf_dirty = True
+        elif action == CONFIRM and self.perf_dirty:
+            text = self.perf_conf
+            for (kind, system), on in self.perf_state.items():
+                if kind == "ra":
+                    text = perf.set_runahead(text, system, on)
+                else:
+                    text = perf.set_overclock(text, system, on)
+            perf.write_conf(text)
+            self._flash("Performance settings saved.", "main",
+                        "batocera.conf backed up  -  applies on next launch")
+
+    def draw_perf(self) -> None:
+        self._title("PERFORMANCE")
+        self._text(self.f_small, "run-ahead + overclock  -  applies on next game launch",
+                   int(self.H * 0.20), color=DIM)
+        rows = self.perf_rows
+        max_rows = 12
+        idx = self.menu_index
+        top = int(self.H * 0.27)
+        start = max(0, min(idx - max_rows // 2, max(0, len(rows) - max_rows)))
+        visible = rows[start:start + max_rows]
+        m = self._m
+        px = m + int(22 * self.s)
+        for i, (kind, system) in enumerate(visible):
+            y = top + i * self.row_h
+            sel = (start + i == idx)
+            if sel:
+                pygame.draw.rect(self.screen, SELECT_BG,
+                                 (px - int(10 * self.s), y - int(2 * self.s),
+                                  self.W - 2 * m - int(40 * self.s), self.row_h))
+            on = self.perf_state[(kind, system)]
+            box = "[x]" if on else "[ ]"
+            tag = "Run-ahead" if kind == "ra" else "Overclock"
+            color = GREEN if sel else (TEAL if on else WHITE)
+            surf = self.f_small.render(f"{'> ' if sel else '  '}{box}  {tag:<10} {system}", True, color)
+            self.screen.blit(surf, (px, y))
+        if len(rows) > max_rows:
+            self._text(self.f_small, f"{start + 1}-{start + len(visible)} of {len(rows)}",
+                       int(self.H * 0.90), color=DIM)
+        dirty = "  -  unsaved changes" if self.perf_dirty else ""
+        self._hint([f"X/Space: toggle{dirty}", "Enter/A: apply", "Esc/B: back"])
+
+    # ===================================================================
+    # RETROACHIEVEMENTS: read-only profile + recent unlocks
+    # ===================================================================
+    def _cheevos_thread(self) -> None:
+        conf = perf.read_conf()
+        if not cheevos.enabled(conf):
+            self.ch_error = "RetroAchievements is not enabled on this cabinet."
+            self.ch_done = True
+            return
+        user, token = cheevos.read_creds(conf)
+        if not user:
+            self.ch_error = "No RetroAchievements account configured."
+            self.ch_done = True
+            return
+        self.ch_summary = cheevos.fetch_summary(user, token)
+        self.ch_recent = cheevos.fetch_recent(user, cheevos.web_api_key())
+        if self.ch_summary is None and self.ch_recent is None:
+            self.ch_error = "Could not reach RetroAchievements (check network)."
+        self.ch_done = True
+
+    def draw_cheevos_loading(self) -> None:
+        self._title("RETROACHIEVEMENTS")
+        self._text(self.f_mid, "Fetching your profile...", int(self.H * 0.45), color=TEAL)
+        self._hint(["please wait..."])
+
+    def on_cheevos(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "main", 0
+            return
+        if self.ch_recent and action in (UP, DOWN):
+            n = len(self.ch_recent)
+            self.ch_index = (self.ch_index + (1 if action == DOWN else -1)) % n
+
+    def draw_cheevos(self) -> None:
+        self._title("RETROACHIEVEMENTS")
+        if self.ch_error:
+            self._text(self.f_mid, self.ch_error, int(self.H * 0.45), color=WHITE)
+            self._hint(["Esc/B: back"])
+            return
+        s = self.ch_summary
+        if s:
+            self._text(self.f_mid, s.get("user", ""), int(self.H * 0.21), color=GREEN)
+            self._text(self.f_small,
+                       f"{s.get('points', 0)} points  -  {s.get('softcore', 0)} softcore",
+                       int(self.H * 0.28), color=TEAL)
+        if self.ch_recent:
+            self._text(self.f_small, "Recent unlocks:", int(self.H * 0.36), color=DIM)
+            max_rows = 9
+            idx = self.ch_index
+            top = int(self.H * 0.42)
+            start = max(0, min(idx - max_rows // 2, max(0, len(self.ch_recent) - max_rows)))
+            visible = self.ch_recent[start:start + max_rows]
+            m = self._m
+            px = m + int(22 * self.s)
+            for i, a in enumerate(visible):
+                y = top + i * self.row_h
+                sel = (start + i == idx)
+                if sel:
+                    pygame.draw.rect(self.screen, SELECT_BG,
+                                     (px - int(10 * self.s), y - int(2 * self.s),
+                                      self.W - 2 * m - int(40 * self.s), self.row_h))
+                txt = f"{'> ' if sel else '  '}{a['game']}  -  {a['title']} (+{a['points']})"
+                self.screen.blit(self.f_small.render(txt, True, GREEN if sel else WHITE), (px, y))
+        elif s:
+            self._text(self.f_small,
+                       "Add retroachievements.web_api_key to settings.json for the unlock feed.",
+                       int(self.H * 0.40), color=DIM)
+        self._hint(["Esc/B: back"])
+
+    # ===================================================================
     # SHADERS: pick system -> browse preset tree
     # ===================================================================
     def on_shaders_systems(self, action: str) -> None:
@@ -897,6 +1056,9 @@ class App:
             if not self.lib_plans:
                 self._flash("No 1G1R duplicates found.", "main",
                             "eligible systems are already deduped")
+        elif self.state == "cheevos_loading" and self.ch_done:
+            self.state, self.menu_index, self.ch_index = "cheevos", 0, 0
+            self.ch_done = False
         elif self.state == "library_progress" and self.lib_apply_done:
             r = self.lib_result
             sysname = self.lib_plans[self.lib_index].system
