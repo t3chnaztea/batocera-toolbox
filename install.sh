@@ -30,7 +30,11 @@ trap cleanup EXIT
 say() { printf '%s\n' "$*"; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 on_batocera() { [ -f "$CONF" ] || [ -f /boot/batocera-boot.conf ]; }
-have_tty() { [ -e /dev/tty ]; }
+# True only when /dev/tty is actually openable (a real controlling terminal).
+# `[ -e /dev/tty ]` is not enough: the node exists under a non-interactive
+# `ssh host 'curl|bash'`, but opening it fails with ENXIO, which would abort
+# the script under `set -e` when onboarding redirects to it.
+have_tty() { (exec 3<>/dev/tty) 2>/dev/null; }
 
 usage() {
   cat >&2 <<USAGE
