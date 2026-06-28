@@ -44,17 +44,13 @@ Two design choices keep it trustworthy:
 |---|---|---|
 | ![BIOS Check](screenshots/05-bios.png) | ![BIOS detail](screenshots/06-bios-detail.png) | ![Shaders](screenshots/07-shaders.png) |
 
-| Library (1G1R) | 1G1R preview | Controller setup |
+| Library (1G1R) | 1G1R preview | Performance |
 |---|---|---|
-| ![Library systems](screenshots/09-library-systems.png) | ![1G1R preview](screenshots/10-library-preview.png) | ![Controller setup](screenshots/08-controller-setup.png) |
+| ![Library systems](screenshots/09-library-systems.png) | ![1G1R preview](screenshots/10-library-preview.png) | ![Performance](screenshots/12-performance.png) |
 
-| Performance | RetroAchievements | 1G1R apply all |
+| RetroAchievements | 1G1R apply all | Crash Logs |
 |---|---|---|
-| ![Performance](screenshots/12-performance.png) | ![RetroAchievements](screenshots/13-retroachievements.png) | ![1G1R apply all](screenshots/11-library-confirm-all.png) |
-
-| Crash Logs | | |
-|---|---|---|
-| ![Crash Logs](screenshots/14-crash-logs.png) | | |
+| ![RetroAchievements](screenshots/13-retroachievements.png) | ![1G1R apply all](screenshots/11-library-confirm-all.png) | ![Crash Logs](screenshots/14-crash-logs.png) |
 
 ## Modules
 
