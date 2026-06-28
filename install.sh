@@ -18,7 +18,7 @@ set -euo pipefail
 REPO="t3chnaztea/batocera-toolbox"
 # Pinned to a release tag for reproducible installs; override with
 # TOOLBOX_REF=main (or another tag) for the rolling/latest payload.
-REF="${TOOLBOX_REF:-v0.3.1}"
+REF="${TOOLBOX_REF:-v0.3.2}"
 PORTS="/userdata/roms/ports"
 STATE="/userdata/saves/ports/toolbox"
 CONF="/userdata/system/batocera.conf"

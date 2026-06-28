@@ -178,7 +178,7 @@ connected device.
 On the Batocera machine (recommended), from an SSH shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/v0.3.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/v0.3.2/install.sh | bash
 ```
 
 It downloads the Toolbox, installs it into the PORTS menu with its icon and
@@ -186,8 +186,8 @@ description, and (in an interactive shell) runs a short onboarding wizard
 (optional backup target + the bezel fix below). No `git` needed; Batocera
 already ships Python, pygame, rsync, curl, and whiptail.
 
-That one-liner pins to the **`v0.3.1`** release for a reproducible install. For
-the rolling latest, swap `v0.3.1` for `main` (or set `TOOLBOX_REF=main`). As
+That one-liner pins to the **`v0.3.2`** release for a reproducible install. For
+the rolling latest, swap `v0.3.2` for `main` (or set `TOOLBOX_REF=main`). As
 with any `curl | bash` installer, this runs as root and trusts this repo. Read
 [`install.sh`](install.sh) first if you'd rather not, or clone and run it
 locally.
