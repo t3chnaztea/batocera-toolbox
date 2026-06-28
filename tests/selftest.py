@@ -539,6 +539,58 @@ def test_cheevos(tmp: Path) -> None:
     check("parse_recent empty -> []", cheevos.parse_recent([]) == [])
 
 
+def test_portmeta(tmp: Path) -> None:
+    from toolbox.core import portmeta
+    import xml.etree.ElementTree as ET
+    print("[portmeta]")
+
+    gl = tmp / "portmeta" / "gamelist.xml"
+    gl.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1) absent -> created with full metadata
+    portmeta.merge_port_entry(gl)
+    root = ET.parse(gl).getroot()
+    tb = [g for g in root.findall("game") if (g.findtext("path") or "") == "./Toolbox.sh"]
+    check("portmeta creates the gamelist", gl.is_file())
+    check("portmeta adds exactly one Toolbox entry", len(tb) == 1)
+    g = tb[0]
+    check("portmeta sets desc", (g.findtext("desc") or "").startswith("Couch-friendly"))
+    check("portmeta sets image", g.findtext("image") == "./images/Toolbox-image.png")
+    check("portmeta sets wheel", g.findtext("wheel") == "./images/Toolbox-wheel.png")
+    check("portmeta sets marquee", g.findtext("marquee") == "./images/Toolbox-wheel.png")
+    check("portmeta sets developer", g.findtext("developer") == "t3chnaztea")
+    check("portmeta sets genre", g.findtext("genre") == "Utility")
+    check("portmeta default name is Toolbox", g.findtext("name") == "Toolbox")
+
+    # 2) other entries + play-stats preserved across a re-merge
+    other = ET.SubElement(root, "game")
+    ET.SubElement(other, "path").text = "./Switch Updater.sh"
+    ET.SubElement(other, "name").text = "Switch Updater"
+    ET.SubElement(g, "playcount").text = "42"
+    ET.SubElement(g, "gametime").text = "9999"
+    ET.ElementTree(root).write(gl, encoding="utf-8", xml_declaration=True)
+
+    portmeta.merge_port_entry(gl)
+    root = ET.parse(gl).getroot()
+    paths = [(x.findtext("path") or "") for x in root.findall("game")]
+    check("portmeta preserves other ports", "./Switch Updater.sh" in paths)
+    tb2 = [x for x in root.findall("game") if (x.findtext("path") or "") == "./Toolbox.sh"][0]
+    check("portmeta preserves playcount on re-merge", tb2.findtext("playcount") == "42")
+    check("portmeta preserves gametime on re-merge", tb2.findtext("gametime") == "9999")
+    check("portmeta refreshes desc on re-merge", bool(tb2.findtext("desc")))
+
+    # 3) backup written before edit
+    baks = list(gl.parent.glob("gamelist.xml.bak-toolbox-*"))
+    check("portmeta writes a backup before editing", len(baks) >= 1)
+
+    # 4) remove drops Toolbox, keeps others
+    portmeta.merge_port_entry(gl, remove=True)
+    root = ET.parse(gl).getroot()
+    paths = [(x.findtext("path") or "") for x in root.findall("game")]
+    check("portmeta --remove drops Toolbox", "./Toolbox.sh" not in paths)
+    check("portmeta --remove keeps other ports", "./Switch Updater.sh" in paths)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -555,6 +607,7 @@ def main() -> int:
         test_library(tmp)
         test_perf(tmp)
         test_cheevos(tmp)
+        test_portmeta(tmp)
     print(f"\n{PASS} OK, {FAIL} NO")
     return 1 if FAIL else 0
 

@@ -163,21 +163,30 @@ connected device.
 
 ## Install
 
+On the Batocera machine (recommended), from an SSH shell:
+
 ```bash
-# from this directory
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/main/install.sh | bash
+```
+
+It downloads the Toolbox, installs it into the PORTS menu with its icon and
+description, and (in an interactive shell) runs a short onboarding wizard
+(optional backup target + the bezel fix below). No `git` needed; Batocera
+already ships Python, pygame, rsync, curl, and whiptail.
+
+Lifecycle -- the same one-liner with a flag:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/main/install.sh | bash -s -- --update      # re-pull latest (keeps your settings)
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/main/install.sh | bash -s -- --uninstall   # remove it (add --purge to also wipe settings.json)
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/main/install.sh | bash -s -- --config      # re-run the onboarding wizard
+```
+
+Or push from a dev machine instead:
+
+```bash
 ./install.sh <your-batocera-ip>        # e.g. ./install.sh 192.168.1.50
 ```
-
-Or manually over SSH:
-
-```bash
-rsync -a --delete --exclude='__pycache__/' -e ssh toolbox/ root@<your-batocera-ip>:/userdata/roms/ports/toolbox/
-scp toolbox.sh root@<your-batocera-ip>:/userdata/roms/ports/Toolbox.sh
-ssh root@<your-batocera-ip> 'chmod +x /userdata/roms/ports/Toolbox.sh; curl -s http://127.0.0.1:1234/reloadgames'
-```
-
-It then appears in the PORTS menu. Batocera ships Python 3, pygame, and rsync,
-so there's nothing else to install.
 
 **Bezel note:** Batocera applies a full-screen bezel to ports by default, which
 overlays a frame on this app. If you see one, set `ports.bezel=none` in
