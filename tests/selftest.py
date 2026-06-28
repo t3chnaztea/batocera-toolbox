@@ -619,6 +619,80 @@ def test_portmeta(tmp: Path) -> None:
           not list(fresh.parent.glob("*.tmp-toolbox")))
 
 
+def test_logs(tmp: Path) -> None:
+    from toolbox.core import logs
+    print("[logs]")
+    ldir = tmp / "logs"
+    ldir.mkdir(parents=True, exist_ok=True)
+    os.environ["TOOLBOX_LOG_DIR"] = str(ldir)
+
+    clean = (
+        "2026 DEBUG callExternalScripts external script: [PosixPath('/x/curate.py'), "
+        "'gameStart', 'snes', 'libretro', 'snes9x', "
+        "PosixPath('/userdata/roms/snes/Zelda (USA).sfc')]\n"
+        "2026 DEBUG runCommand command: ['retroarch', "
+        "PosixPath('/userdata/roms/snes/Zelda (USA).sfc')]\n"
+        "2026 DEBUG launch Exiting configgen with status 0\n"
+    )
+    ll = logs.parse_last_launch(clean)
+    check("logs parse game basename", ll.game == "Zelda (USA).sfc")
+    check("logs parse system", ll.system == "snes")
+    check("logs parse emulator", ll.emulator == "libretro")
+    check("logs parse status 0", ll.status == 0)
+    check("logs clean verdict", ll.verdict == "clean exit (0)")
+
+    ll = logs.parse_last_launch(clean.replace("status 0", "status 1"))
+    check("logs failed status", ll.status == 1)
+    check("logs failed verdict", ll.verdict == "FAILED (exit 1)")
+
+    hung = ("2026 'gameStart', 'n64', 'libretro', 'mupen64plus', "
+            "PosixPath('/userdata/roms/n64/Mario.z64')]\n2026 still running\n")
+    ll = logs.parse_last_launch(hung)
+    check("logs hung status None", ll.status is None)
+    check("logs hung verdict", ll.verdict.startswith("no clean exit"))
+
+    two = ("'gameStart', 'psx', 'libretro', 'pcsx', PosixPath('/roms/psx/A.cue')]\n"
+           "launch Exiting configgen with status 0\n"
+           "'gameStart', 'n64', 'libretro', 'mupen', PosixPath('/roms/n64/B.z64')]\n"
+           "launch Exiting configgen with status 0\n")
+    ll = logs.parse_last_launch(two)
+    check("logs picks the last launch", ll.system == "n64" and ll.game == "B.z64")
+
+    stderr = ("evmapy: no process found\n"
+              "2026 ERROR (foo.py:1):runCommand boom\n"
+              "/x: No such file or directory\n")
+    ll = logs.parse_last_launch(clean, stderr)
+    check("logs errors include the ERROR line", any("boom" in e for e in ll.errors))
+    check("logs errors include the No-such line",
+          any("No such file" in e for e in ll.errors))
+
+    check("logs none when no gameStart", logs.parse_last_launch("nothing") is None)
+
+    # list_logs: 2 files + 1 subdir, newest mtime first
+    (ldir / "a.log").write_text("aaa")
+    (ldir / "b.log").write_text("bbb")
+    (ldir / "subdir").mkdir(exist_ok=True)
+    os.utime(ldir / "a.log", (1000, 1000))
+    os.utime(ldir / "b.log", (2000, 2000))
+    names = [f.name for f in logs.list_logs()]
+    check("list_logs skips subdirs", "subdir" not in names)
+    check("list_logs newest mtime first", names and names[0] == "b.log")
+
+    # tail: last 3 of 10 lines
+    big = ldir / "ten.log"
+    big.write_text("\n".join(f"line{i}" for i in range(10)) + "\n")
+    check("tail returns last 3 lines", logs.tail(big, 3) == ["line7", "line8", "line9"])
+
+    # read_launch_logs reads the two ES logs
+    (ldir / "es_launch_stdout.log").write_text(clean)
+    (ldir / "es_launch_stderr.log").write_text(stderr)
+    so, se = logs.read_launch_logs()
+    check("read_launch_logs reads stdout", "gameStart" in so)
+    check("read_launch_logs reads stderr", "ERROR" in se)
+
+    del os.environ["TOOLBOX_LOG_DIR"]
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -636,6 +710,7 @@ def main() -> int:
         test_perf(tmp)
         test_cheevos(tmp)
         test_portmeta(tmp)
+        test_logs(tmp)
     print(f"\n{PASS} OK, {FAIL} NO")
     return 1 if FAIL else 0
 

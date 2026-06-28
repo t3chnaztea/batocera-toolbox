@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pygame
 
-from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos
+from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos, logs
 from . import controls
 from .controls import UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, SELECT, QUIT
 
@@ -149,6 +149,15 @@ class App:
         self.ch_recent: list | None = None
         self.ch_index = 0
 
+        # crash-logs state
+        self.log_files: list = []                 # logs.LogFile, newest first
+        self.log_index = 0                        # selected file in the list
+        self.log_last: logs.LastLaunch | None = None
+        self.log_detail_name = ""                 # file open in the tail view
+        self.log_detail_lines: list = []          # tail() of that file
+        self.log_detail_index = 0                 # scroll position in the tail
+
+
     # ===================================================================
     def run(self) -> None:
         while self.running:
@@ -223,7 +232,7 @@ class App:
     MAIN_ITEMS = [("Backup", "backup"), ("Restore", "restore"),
                   ("ROM Audit", "audit_run"), ("BIOS Check", "bios_run"),
                   ("Shaders", "shaders"), ("Library (1G1R)", "library"),
-                  ("Performance", "perf"), ("RetroAchievements", "cheevos"),
+                  ("Performance", "perf"), ("RetroAchievements", "cheevos"), ("Crash Logs", "logs"),
                   ("Controller setup", "ctlsetup"), ("Quit", "quit")]
 
     def on_main(self, action: str) -> None:
@@ -1207,6 +1216,117 @@ class App:
         y = m + int(14 * self.s) + self.f_big.get_height() - self.f_small.get_height() - int(2 * self.s)
         surf = self.f_small.render(f"Toolbox  ·  Batocera {self.bver}", True, DIM)
         self.screen.blit(surf, (self.W - m - int(20 * self.s) - surf.get_width(), y))
+
+    # ===================================================================
+    # CRASH LOGS: last-launch verdict + read-only log tail browser
+    # ===================================================================
+    def _enter_logs(self) -> None:
+        self.log_files = logs.list_logs()
+        self.log_last = logs.parse_last_launch(*logs.read_launch_logs())
+        self.log_index = 0
+        self.state, self.menu_index = "logs", 0
+
+    @staticmethod
+    def _humansize(n: int) -> str:
+        for unit in ("B", "K", "M", "G"):
+            if n < 1024 or unit == "G":
+                return f"{n}{unit}" if unit == "B" else f"{n:.0f}{unit}"
+            n /= 1024
+        return f"{n:.0f}G"
+
+    def _clip(self, text: str, font, avail_px: int) -> str:
+        cw = max(1, font.size("M")[0])
+        maxc = max(1, avail_px // cw)
+        return text if len(text) <= maxc else text[:maxc - 1] + "..."
+
+    def _open_log(self, lf) -> None:
+        self.log_detail_name = lf.name
+        self.log_detail_lines = logs.tail(lf.path)
+        self.log_detail_index = 0
+        self.state = "log_detail"
+
+    def on_logs(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "main", 0
+            return
+        if not self.log_files:
+            return
+        if action == SELECT:                       # jump to the crash stderr
+            for lf in self.log_files:
+                if lf.name == "es_launch_stderr.log":
+                    self._open_log(lf)
+                    return
+            return
+        self._move(len(self.log_files), action)
+        self.log_index = self.menu_index
+        if action == CONFIRM:
+            self._open_log(self.log_files[self.log_index])
+
+    def draw_logs(self) -> None:
+        self._title("CRASH LOGS")
+        m = self._m
+        left = m + int(22 * self.s)
+        avail = self.W - 2 * m - int(40 * self.s)
+        ll = self.log_last
+        if ll:
+            self._text(self.f_mid, self._clip(f"Last launch:  {ll.game}", self.f_mid, avail),
+                       int(self.H * 0.20), color=TEAL, left=left)
+            self._text(self.f_small, f"{ll.system}  /  {ll.emulator}",
+                       int(self.H * 0.27), color=DIM, left=left)
+            vcolor = GREEN if ll.status == 0 else (RED if ll.status is not None else PINK)
+            self._text(self.f_small, ll.verdict, int(self.H * 0.32), color=vcolor, left=left)
+            for i, err in enumerate(ll.errors[:3]):
+                self._text(self.f_small, self._clip(err, self.f_small, avail),
+                           int(self.H * 0.37) + i * self.row_h, color=RED, left=left)
+        else:
+            self._text(self.f_mid, "No recent launch recorded.",
+                       int(self.H * 0.22), color=DIM, left=left)
+
+        self._text(self.f_small, "Logs in /userdata/system/logs  (newest first):",
+                   int(self.H * 0.53), color=DIM, left=left)
+        if not self.log_files:
+            self._text(self.f_mid, "No logs found.", int(self.H * 0.62), color=WHITE, left=left)
+            self._hint(["Esc/B: back"])
+            return
+        labels = [f"{f.name}   ({self._humansize(f.size)})" for f in self.log_files]
+        self._list(labels, self.log_index, top=int(self.H * 0.58),
+                   font=self.f_small, max_rows=5)
+        self._text(self.f_small, f"{self.log_index + 1} of {len(self.log_files)}",
+                   int(self.H * 0.90), color=DIM)
+        self._hint(["Up/Down: pick", "Enter/A: view", "X: crash stderr", "Esc/B: back"])
+
+    def on_log_detail(self, action: str) -> None:
+        if action == BACK:
+            self.state = "logs"
+            return
+        n = len(self.log_detail_lines)
+        if n and action in (UP, DOWN):
+            step = 1 if action == DOWN else -1
+            self.log_detail_index = max(0, min(self.log_detail_index + step, n - 1))
+
+    def draw_log_detail(self) -> None:
+        self._title(self._clip(self.log_detail_name or "LOG", self.f_big,
+                               self.W - 2 * self._m - int(40 * self.s)))
+        m = self._m
+        left = m + int(22 * self.s)
+        avail = self.W - 2 * m - int(40 * self.s)
+        lines = self.log_detail_lines
+        if not lines:
+            self._text(self.f_mid, "(could not read, or empty)",
+                       int(self.H * 0.45), color=DIM, left=left)
+            self._hint(["Esc/B: back"])
+            return
+        max_rows = 13
+        idx = self.log_detail_index
+        top = int(self.H * 0.18)
+        start = max(0, min(idx - max_rows // 2, max(0, len(lines) - max_rows)))
+        for i, line in enumerate(lines[start:start + max_rows]):
+            self._text(self.f_small, self._clip(line, self.f_small, avail),
+                       top + i * self.row_h, color=WHITE, left=left)
+        self._text(self.f_small,
+                   f"{start + 1}-{min(start + max_rows, len(lines))} of {len(lines)}",
+                   int(self.H * 0.92), color=DIM)
+        self._hint(["Up/Down: scroll", "Esc/B: back"])
 
     def _title(self, text: str) -> None:
         m = getattr(self, "_m", int(min(self.W, self.H) * 0.03))

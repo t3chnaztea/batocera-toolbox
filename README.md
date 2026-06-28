@@ -6,9 +6,9 @@
 > Toolbox issues here, not to the Batocera team.
 
 A couch-friendly, gamepad-driven utility **Port** for [Batocera](https://batocera.org).
-One app, nine modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
-**Shaders**, **Library (1G1R)**, **Performance**, **RetroAchievements**, and
-**Controller setup**. It installs into the PORTS menu and runs entirely on the
+One app, ten modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
+**Shaders**, **Library (1G1R)**, **Performance**, **RetroAchievements**,
+**Crash Logs**, and **Controller setup**. It installs into the PORTS menu and runs entirely on the
 machine, so you maintain your cabinet from the couch instead of SSHing in.
 
 It uses a RetroArch RGUI look (phosphor green on near-black, double-line border,
@@ -51,6 +51,10 @@ Two design choices keep it trustworthy:
 | Performance | RetroAchievements | 1G1R apply all |
 |---|---|---|
 | ![Performance](screenshots/12-performance.png) | ![RetroAchievements](screenshots/13-retroachievements.png) | ![1G1R apply all](screenshots/11-library-confirm-all.png) |
+
+| Crash Logs | | |
+|---|---|---|
+| ![Crash Logs](screenshots/14-crash-logs.png) | | |
 
 ## Modules
 
@@ -152,6 +156,18 @@ recent-unlocks feed needs a separate **web API key** (from retroachievements.org
 run on a worker thread with a short timeout; the JSON parsers are unit-tested.
 Writes nothing.
 
+### Crash Logs
+Read-only crash/log viewer, so "why did that game die" is one screen instead of
+an SSH session. It leads with a **last-launch card**: it parses Batocera's
+`es_launch_stdout.log` (the `emulatorlauncher.py` launch markers) for the most
+recent launch and shows the game, `system / emulator`, and a colored verdict:
+green `clean exit (0)`, red `FAILED (exit N)`, or amber `no clean exit recorded
+(hang or hard crash?)` when the run never returned. The error lines come from
+`es_launch_stderr.log`. Below the card is a newest-first list of every file in
+`/userdata/system/logs`; Enter tails one (a bounded read, so a huge `backup.log`
+never loads whole), `X` jumps straight to `es_launch_stderr.log`. The
+`core/logs.py` parsers are unit-tested; the module writes nothing.
+
 ### Controller setup
 Keyboard always works (arrows / WASD, Enter = confirm, Esc = back, Space =
 select). For a gamepad, button numbering varies by device, so on first launch
@@ -166,7 +182,7 @@ connected device.
 On the Batocera machine (recommended), from an SSH shell:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/v0.2.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/t3chnaztea/batocera-toolbox/v0.3.0/install.sh | bash
 ```
 
 It downloads the Toolbox, installs it into the PORTS menu with its icon and
@@ -174,8 +190,8 @@ description, and (in an interactive shell) runs a short onboarding wizard
 (optional backup target + the bezel fix below). No `git` needed; Batocera
 already ships Python, pygame, rsync, curl, and whiptail.
 
-That one-liner pins to the **`v0.2.0`** release for a reproducible install. For
-the rolling latest, swap `v0.2.0` for `main` (or set `TOOLBOX_REF=main`). As
+That one-liner pins to the **`v0.3.0`** release for a reproducible install. For
+the rolling latest, swap `v0.3.0` for `main` (or set `TOOLBOX_REF=main`). As
 with any `curl | bash` installer, this runs as root and trusts this repo. Read
 [`install.sh`](install.sh) first if you'd rather not, or clone and run it
 locally.
@@ -237,6 +253,7 @@ toolbox/
       library.py        1G1R dedup: hide redundant variants in gamelist.xml
       perf.py           per-system run-ahead + overclock toggles
       cheevos.py        RetroAchievements profile view (read-only)
+      logs.py           crash-log viewer: parse last launch + tail logs
     ui/app.py           pygame state-machine UI (menu + all modules)
     ui/controls.py      keyboard + gamepad input, first-run button wizard
     assets/             bundled DejaVuSansMono.ttf
@@ -250,7 +267,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 177 assertions, no pygame/network needed
+python3 tests/selftest.py      # 195 assertions, no pygame/network needed
 ```
 
 ## License
