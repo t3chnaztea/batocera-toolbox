@@ -6,8 +6,10 @@ the headless self-test can redirect them at a temp tree instead of the real
 """
 from __future__ import annotations
 
+import io
 import json
 import os
+import time
 from pathlib import Path
 
 
@@ -108,6 +110,77 @@ def backup_config() -> dict:
     cfg = dict(DEFAULT_BACKUP)
     cfg.update(load_settings().get("backup", {}))
     return cfg
+
+
+# --- Safe file writes (atomic + capped timestamped backups) ----------------
+# batocera.conf and gamelist.xml are read by the OS / EmulationStation at boot,
+# so every Toolbox edit backs the file up (timestamped, capped) and writes
+# atomically (temp + os.replace) to survive a mid-write power cut. These are the
+# single home for those rules; perf, shaders, library, and portmeta all use them
+# instead of hand-rolling their own backup/write.
+BACKUP_KEEP = 5
+
+
+def prune_backups(path, keep: int = BACKUP_KEEP) -> None:
+    """Keep only the newest `keep` `<name>.bak-toolbox-*` files beside `path`.
+
+    Backup names embed a sortable `YYYYMMDD-HHMMSS` stamp, so a name sort is
+    chronological; older copies beyond `keep` are removed.
+    """
+    p = Path(path)
+    baks = sorted(p.parent.glob(f"{p.name}.bak-toolbox-*"), key=lambda b: b.name)
+    for old in (baks[:-keep] if keep > 0 else baks):
+        old.unlink(missing_ok=True)
+
+
+def backup_file(path, keep: int = BACKUP_KEEP) -> None:
+    """Timestamped copy of an existing file, then prune to `keep`. No-op if absent."""
+    p = Path(path)
+    if not p.is_file():
+        return
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    p.with_name(f"{p.name}.bak-toolbox-{ts}").write_bytes(p.read_bytes())
+    prune_backups(p, keep)
+
+
+def atomic_write_bytes(path, data: bytes) -> None:
+    """Write bytes via a temp sibling + os.replace, so `path` is never half-written."""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f"{p.name}.tmp-toolbox")
+    tmp.write_bytes(data)
+    os.replace(tmp, p)
+
+
+def atomic_write_text(path, text: str, encoding: str = "utf-8") -> None:
+    """Atomic text write (see atomic_write_bytes)."""
+    atomic_write_bytes(path, text.encode(encoding))
+
+
+def atomic_write_tree(tree, path) -> None:
+    """Atomically write an ElementTree, so a crash can't truncate the gamelist ES
+    reads on boot."""
+    buf = io.BytesIO()
+    tree.write(buf, encoding="utf-8", xml_declaration=True)
+    atomic_write_bytes(path, buf.getvalue())
+
+
+def read_conf_text() -> str:
+    """Read batocera.conf. Returns '' ONLY for a genuinely absent file; a present
+    but unreadable file RAISES (OSError / UnicodeDecodeError). This is the fix for
+    the wipe bug: a failed read must never be mistaken for an empty conf and then
+    rewritten over the real one."""
+    p = batocera_conf()
+    if not p.exists():
+        return ""
+    return p.read_text(encoding="utf-8")
+
+
+def write_batocera_conf(text: str) -> None:
+    """Back up (capped) then atomically write batocera.conf."""
+    p = batocera_conf()
+    backup_file(p)
+    atomic_write_text(p, text)
 
 
 # --- Directory classification --------------------------------------------

@@ -19,8 +19,12 @@ _DEFAULT_LOG_DIR = "/userdata/system/logs"
 # emulatorlauncher.py launch markers (format observed on Batocera v43):
 #   ... 'gameStart', '<system>', '<emulator>', '<core>', PosixPath('<rompath>')
 #   ... launch Exiting configgen with status <N>
+# The rompath is Python's repr of a PosixPath, so a path containing an
+# apostrophe (common in No-Intro names, e.g. "Assassin's Creed") is emitted with
+# DOUBLE quotes -- PosixPath("..."). Accept either quote style, or the launch is
+# invisible and the card reports the previous game's verdict.
 _GAMESTART = re.compile(
-    r"'gameStart',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*PosixPath\('([^']*)'\)")
+    r"""'gameStart',\s*'([^']*)',\s*'([^']*)',\s*'([^']*)',\s*PosixPath\((['"])(.*?)\4\)""")
 _STATUS = re.compile(r"Exiting configgen with status (-?\d+)")
 
 # Substrings that mark a line as an error worth surfacing in the crash summary.
@@ -130,13 +134,13 @@ def parse_last_launch(stdout_text: str, stderr_text: str = "",
     matches = list(_GAMESTART.finditer(stdout_text))
     chosen = None
     for i in range(len(matches) - 1, -1, -1):
-        if os.path.basename(matches[i].group(4)) != ignore_basename:
+        if os.path.basename(matches[i].group(5)) != ignore_basename:
             chosen = i
             break
     if chosen is None:
         return None
     m = matches[chosen]
-    system, emulator, core, rompath = m.group(1), m.group(2), m.group(3), m.group(4)
+    system, emulator, core, rompath = m.group(1), m.group(2), m.group(3), m.group(5)
     game = os.path.basename(rompath) or rompath
     end = matches[chosen + 1].start() if chosen + 1 < len(matches) else len(stdout_text)
     window = stdout_text[m.end():end]
