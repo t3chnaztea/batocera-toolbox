@@ -9,15 +9,12 @@ silent-fail trap (a typo'd preset name loads nothing, with no error).
 
 `enumerate_presets()` returns the valid values; `entries()` turns that flat list
 into a folder->preset browse tree; `get_renderer()`/`set_renderer()` read and
-rewrite batocera.conf, preserving every other line and stamping a one-time
-backup before the first edit.
+rewrite batocera.conf, preserving every other line and writing a capped,
+timestamped backup before each edit (atomic write, via config).
 """
 from __future__ import annotations
 
 import re
-import shutil
-import time
-from pathlib import Path
 
 from . import config
 
@@ -65,11 +62,10 @@ def entries(prefix: str = "", presets: list[str] | None = None) -> tuple[list[st
 
 
 def _read_conf_text() -> str:
-    p = config.batocera_conf()
-    try:
-        return p.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    """batocera.conf text. Empty only when genuinely absent; a present-but-
+    unreadable conf RAISES so its snapshot is never rewritten over the real
+    file (see config.read_conf_text)."""
+    return config.read_conf_text()
 
 
 def get_renderer(system: str, text: str | None = None) -> str | None:
@@ -94,7 +90,8 @@ def set_renderer(system: str, value: str, *, presets: list[str] | None = None) -
         if value not in valid:
             raise ValueError(f"not a valid shader preset: {value!r}")
 
-    conf = config.batocera_conf()
+    # Read the current conf up front. A failed read RAISES here (not "") so we
+    # never rewrite an empty file over a real, momentarily-unreadable conf.
     text = _read_conf_text()
     lines = text.splitlines()
     rx = re.compile(rf"^\s*{re.escape(system)}-renderer\.shader\s*=")
@@ -102,13 +99,5 @@ def set_renderer(system: str, value: str, *, presets: list[str] | None = None) -
     if value != INHERIT:
         kept.append(f"{key}={value}")
 
-    # One-time safety copy before the first edit.
-    bak = conf.with_name(conf.name + f".bak-toolbox-{time.strftime('%Y%m%d-%H%M%S')}")
-    try:
-        if conf.is_file():
-            shutil.copy2(conf, bak)
-    except OSError:
-        pass
-
-    conf.parent.mkdir(parents=True, exist_ok=True)
-    conf.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    # Back up (capped) then write atomically, both handled by config.
+    config.write_batocera_conf("\n".join(kept) + "\n")
