@@ -10,14 +10,14 @@ are left untouched.
 """
 from __future__ import annotations
 
-import os
 import sys
-import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+from . import config
+
 # How many gamelist.xml.bak-toolbox-* copies to keep (newest first).
-BACKUP_KEEP = 5
+BACKUP_KEEP = config.BACKUP_KEEP
 
 # Static metadata + media we ship for the Toolbox PORTS entry. Media paths are
 # gamelist-relative (./images/...), matching how Batocera stores them.
@@ -37,30 +37,11 @@ TOOLBOX_META = {
 }
 
 
-def prune_backups(path: Path | str, keep: int = BACKUP_KEEP) -> None:
-    """Keep only the newest `keep` `<name>.bak-toolbox-*` files beside `path`.
-
-    Backup names embed a sortable `YYYYMMDD-HHMMSS` stamp, so a name sort is
-    chronological. Older copies beyond `keep` are removed.
-    """
-    p = Path(path)
-    baks = sorted(p.parent.glob(f"{p.name}.bak-toolbox-*"), key=lambda b: b.name)
-    for old in baks[:-keep] if keep > 0 else baks:
-        old.unlink(missing_ok=True)
-
-
-def _backup(path: Path) -> None:
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    path.with_name(f"{path.name}.bak-toolbox-{ts}").write_bytes(path.read_bytes())
-    prune_backups(path)
-
-
-def _write_atomic(tree: ET.ElementTree, path: Path) -> None:
-    """Write to a temp sibling then os.replace, so the gamelist is never seen
-    half-written (it's read by EmulationStation on boot)."""
-    tmp = path.with_name(f"{path.name}.tmp-toolbox")
-    tree.write(tmp, encoding="utf-8", xml_declaration=True)
-    os.replace(tmp, path)
+# Backup/atomic-write primitives live in config now (shared with perf/shaders/
+# library). Re-exported here so the module's public surface and tests are stable.
+prune_backups = config.prune_backups
+_backup = config.backup_file
+_write_atomic = config.atomic_write_tree
 
 
 def merge_port_entry(gamelist_path: Path | str, sh_relpath: str = "./Toolbox.sh",

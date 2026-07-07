@@ -6,7 +6,8 @@ UP / DOWN / CONFIRM / BACK / SELECT so keyboard and gamepad run identical code.
 
 Long jobs (rsync backup, the ROM walk) run on a worker thread and publish plain
 attributes that the main loop polls each frame; pygame calls stay on the main
-thread. The Shaders module is not wired up yet (see the package README).
+thread. A worker carries a generation id so a cancelled (abandoned) worker can't
+drive a later screen (see _spawn).
 """
 from __future__ import annotations
 
@@ -68,6 +69,7 @@ class App:
         self.input = controls.InputManager()
         self.setup_step = 0
         self.setup_return = "main"
+        self.setup_assigned: list[int] = []      # buttons taken so far this wizard
 
         self.running = True
         # First run with a gamepad and no saved mapping -> learn the buttons.
@@ -96,6 +98,10 @@ class App:
         self.audit_index = 0
         self.audit_prog = (0, 0, "")     # (done, total, system) for the loading bar
         self._worker: threading.Thread | None = None
+        # Bumped on every spawn and on cancel; a worker whose generation is no
+        # longer current can't set its done flag or report an error, so an
+        # abandoned (cancelled) worker never drives a later screen.
+        self._worker_gen = 0
         # Set by any worker that raises; surfaced (not swallowed) by _poll_workers
         # so a crashed job shows an error and returns to the menu instead of
         # leaving the loading screen frozen forever.
@@ -207,23 +213,33 @@ class App:
     def _cancel_loading(self) -> None:
         self.worker_error = ""
         self._clear_done_flags()
+        self._worker_gen += 1          # orphan the abandoned worker
         self.state, self.menu_index = "main", 0
 
     def _spawn(self, target, done_attr: str) -> None:
         """Run a worker body on a daemon thread, capturing any exception.
 
-        On an unhandled error we record it AND still set the done flag, so the
-        main loop leaves the loading screen (showing the error) instead of
+        Each spawn takes a generation id. A worker whose generation is no longer
+        current (the user cancelled, or started another load) sets neither its
+        done flag nor worker_error, so an abandoned slow worker (e.g. a hung NAS
+        listing) can't wake a later screen with stale results or a phantom error.
+        On success or unhandled error of the CURRENT worker the done flag is set,
+        so the loop leaves the loading screen (showing any error) instead of
         hanging on "please wait" forever — the exact trap that froze the audit.
         """
         self.worker_error = ""
+        self._worker_gen += 1
+        gen = self._worker_gen
 
         def runner() -> None:
             try:
                 target()
             except Exception as e:                       # surface, never freeze
-                self.worker_error = f"{type(e).__name__}: {e}"
-                setattr(self, done_attr, True)
+                if gen == self._worker_gen:
+                    self.worker_error = f"{type(e).__name__}: {e}"
+            finally:
+                if gen == self._worker_gen:
+                    setattr(self, done_attr, True)
 
         self._worker = threading.Thread(target=runner, daemon=True)
         self._worker.start()
@@ -261,10 +277,15 @@ class App:
         self.state = "audit_loading"
 
     def _enter_shaders(self) -> None:
+        try:
+            self.sh_conf = shaders._read_conf_text()
+        except (OSError, ValueError):
+            self._flash("Can't read batocera.conf.", "main",
+                        "the file exists but wouldn't read - not editing it")
+            return
         self.sh_presets = shaders.enumerate_presets()
         # Only systems we actually have games for: no point shading an empty one.
         self.sh_systems = config.list_systems_with_roms()
-        self.sh_conf = shaders._read_conf_text()
         self.state, self.menu_index = "shaders_systems", 0
 
     def _enter_bios_run(self) -> None:
@@ -293,7 +314,12 @@ class App:
         self.state = "library_loading"
 
     def _enter_perf(self) -> None:
-        self.perf_conf = perf.read_conf()
+        try:
+            self.perf_conf = perf.read_conf()
+        except (OSError, ValueError):
+            self._flash("Can't read batocera.conf.", "main",
+                        "the file exists but wouldn't read - not editing it")
+            return
         ra = perf.read_runahead(self.perf_conf)
         oc = perf.read_overclock(self.perf_conf)
         self.perf_rows = [("ra", s) for s in ra] + [("oc", s) for s in oc]
@@ -316,6 +342,7 @@ class App:
             self._flash("No gamepad detected.", "main", "Keyboard always works.")
             return
         self.setup_step = 0
+        self.setup_assigned = []
         self.setup_return = "main"
         self.state = "controller_setup"
 
@@ -330,8 +357,17 @@ class App:
             self._flash("Setup skipped (using keyboard).", self.setup_return)
             return
         if event.type == pygame.JOYBUTTONDOWN:
+            # Reject a button already bound to an earlier action: translate()
+            # returns the FIRST matching action, so a duplicate would make the
+            # later action (e.g. BACK) unreachable from the pad -- trapping the
+            # user in submenus with no keyboard.
+            if event.button in self.setup_assigned:
+                self._flash("That button is already used.", "controller_setup",
+                            "press a different button for this action")
+                return
             action_key = controls.SETUP_STEPS[self.setup_step][0]
             self.input.mapping[action_key] = event.button
+            self.setup_assigned.append(event.button)
             self.setup_step += 1
             if self.setup_step >= len(controls.SETUP_STEPS):
                 self.input.save_mapping()
@@ -402,7 +438,6 @@ class App:
         def cb(leg: str, pct: int) -> None:
             self.bk_leg, self.bk_pct = leg, pct
         self.bk_result = backup.run_backup(self.bk_tier, dry_run=self.backup_dryrun, on_progress=cb)
-        self.bk_done = True
 
     def draw_backup_progress(self) -> None:
         self._title("BACKING UP")
@@ -422,7 +457,6 @@ class App:
         # Drop empty systems (0 games) from the dashboard: no roms, nothing to show.
         rows = audit.audit_systems(on_progress=cb)
         self.audit_rows = [r for r in rows if r.games > 0]
-        self.audit_done = True
 
     def draw_audit_loading(self) -> None:
         self._title("ROM AUDIT")
@@ -497,7 +531,6 @@ class App:
         except OSError:
             conf_text = ""
         bios.annotate_cores(self.bios_all, conf_text)
-        self.bios_done = True
 
     def _bios_build_rows(self) -> None:
         if self.bios_show_all:
@@ -507,7 +540,11 @@ class App:
         # How many played systems we suppressed because their core needs no BIOS.
         self.bios_hidden = sum(1 for s in self.bios_all
                                if s.problems > 0 and s.system in self.bios_played and s.bios_free)
-        self.bios_index = 0
+        # Reset BOTH cursors together: the all/played toggle rebuilds (and can
+        # shrink) bios_rows, and on_bios copies menu_index into bios_index on the
+        # next CONFIRM. Leaving menu_index stale would index past the shorter list
+        # and crash draw_bios_detail with an IndexError.
+        self.bios_index = self.menu_index = 0
 
     def draw_bios_loading(self) -> None:
         self._title("BIOS CHECK")
@@ -592,6 +629,8 @@ class App:
         if not self.bios_rows:
             self.state = "bios"
             return
+        # Clamp: the all/played toggle can shrink bios_rows under the cursor.
+        self.bios_index = min(self.bios_index, len(self.bios_rows) - 1)
         sysb = self.bios_rows[self.bios_index]
         self._text(self.f_mid, sysb.system, int(self.H * 0.20), color=TEAL)
         if sysb.core:
@@ -614,8 +653,8 @@ class App:
     # RESTORE (pull a category back from the NAS; dry-run by default)
     # ===================================================================
     def _restore_list_thread(self) -> None:
+        # None = couldn't reach the NAS; [] = reached, nothing backed up yet.
         self.rs_cats = restore.list_remote_categories()
-        self.rs_listed = True
 
     def draw_restore_loading(self) -> None:
         self._title("RESTORE")
@@ -681,7 +720,6 @@ class App:
         def cb(leg: str, pct: int) -> None:
             self.rs_leg, self.rs_pct = leg, pct
         self.rs_result = restore.run_restore(self.rs_cat, dry_run=self.restore_dryrun, on_progress=cb)
-        self.rs_done = True
 
     def draw_restore_progress(self) -> None:
         self._title("RESTORING")
@@ -699,7 +737,6 @@ class App:
         # Build a hide plan per eligible system; keep only ones with work to do.
         plans = [library.plan_system(s) for s in library.eligible_systems()]
         self.lib_plans = [p for p in plans if p.hide or p.n_skipped]
-        self.lib_done = True
 
     def draw_library_loading(self) -> None:
         self._title("LIBRARY (1G1R)")
@@ -834,7 +871,6 @@ class App:
     def _library_apply_thread(self) -> None:
         p = self.lib_plans[self.lib_index]
         self.lib_result = library.apply_hides(p.system, p.hide)
-        self.lib_apply_done = True
 
     # --- Apply ALL systems in one pass --------------------------------------
     def on_library_confirm_all(self, action: str) -> None:
@@ -868,7 +904,6 @@ class App:
             agg.hidden += r.hidden
             agg.fav_protected += r.fav_protected
         self.lib_result = agg
-        self.lib_apply_done = True
 
     def draw_library_progress(self) -> None:
         self._title("APPLYING 1G1R")
@@ -900,7 +935,12 @@ class App:
                     text = perf.set_runahead(text, system, on)
                 else:
                     text = perf.set_overclock(text, system, on)
-            perf.write_conf(text)
+            try:
+                perf.write_conf(text)
+            except (OSError, ValueError):
+                self._flash("Couldn't save batocera.conf.", "main",
+                            "no changes written - the conf is untouched")
+                return
             self._flash("Performance settings saved.", "main",
                         "batocera.conf backed up  -  applies on next launch")
 
@@ -939,21 +979,21 @@ class App:
     # RETROACHIEVEMENTS: read-only profile + recent unlocks
     # ===================================================================
     def _cheevos_thread(self) -> None:
-        conf = perf.read_conf()
+        try:
+            conf = perf.read_conf()
+        except (OSError, ValueError):
+            conf = ""      # unreadable conf: treat as not configured, don't crash
         if not cheevos.enabled(conf):
             self.ch_error = "RetroAchievements is not enabled on this cabinet."
-            self.ch_done = True
             return
         user, token = cheevos.read_creds(conf)
         if not user:
             self.ch_error = "No RetroAchievements account configured."
-            self.ch_done = True
             return
         self.ch_summary = cheevos.fetch_summary(user, token)
         self.ch_recent = cheevos.fetch_recent(user, cheevos.web_api_key())
         if self.ch_summary is None and self.ch_recent is None:
             self.ch_error = "Could not reach RetroAchievements (check network)."
-        self.ch_done = True
 
     def draw_cheevos_loading(self) -> None:
         self._title("RETROACHIEVEMENTS")
@@ -1078,10 +1118,10 @@ class App:
     def _apply_shader(self, value: str | None) -> None:
         try:
             shaders.set_renderer(self.sh_system, value, presets=self.sh_presets)
+            self.sh_conf = shaders._read_conf_text()
         except (ValueError, OSError) as e:
             self._flash(f"Failed: {e}", "shaders_systems")
             return
-        self.sh_conf = shaders._read_conf_text()
         if value == shaders.INHERIT:
             self._flash(f"{self.sh_system}: cleared (inherits global)", "shaders_systems")
         else:
@@ -1143,7 +1183,11 @@ class App:
         elif self.state == "restore_loading" and self.rs_listed:
             self.state, self.menu_index = "restore", 0
             self.rs_listed = False
-            if not self.rs_cats:
+            if self.rs_cats is None:
+                self.rs_cats = []
+                self._flash("Couldn't reach the NAS.", "main",
+                            "check the host / SSH key / that it's powered on")
+            elif not self.rs_cats:
                 self._flash("Nothing on the NAS to restore yet.", "main",
                             "run a Backup first")
         elif self.state == "restore_progress" and self.rs_done:

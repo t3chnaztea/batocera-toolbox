@@ -99,8 +99,20 @@ try:
     port = int(port or 22)
 except ValueError:
     port = 22
+# Merge into any existing settings.json: only the "backup" key is ours to set.
+# A blind overwrite here would wipe other keys the app stores in this same file
+# (e.g. retroachievements.web_api_key) whenever onboarding / --config re-runs.
+data = {}
+try:
+    with open(out) as f:
+        loaded = json.load(f)
+    if isinstance(loaded, dict):
+        data = loaded
+except (OSError, ValueError):
+    data = {}
+data["backup"] = {"host": host, "port": port, "user": user, "dest": dest}
 with open(out, "w") as f:
-    json.dump({"backup": {"host": host, "port": port, "user": user, "dest": dest}}, f, indent=2)
+    json.dump(data, f, indent=2)
 PY
   say "Wrote ${STATE}/settings.json"
 }

@@ -147,7 +147,7 @@ def test_backup(tmp: Path) -> None:
     everything = backup.tier_sources("everything")
     check("everything = 2 legs (userdata excl roms + roms), mirrors the cron",
           len(everything) == 2 and everything[0].rel == "" and everything[0].dest_name == "userdata"
-          and "roms/" in everything[0].excludes and everything[1].dest_name == "roms")
+          and "/roms/" in everything[0].excludes and everything[1].dest_name == "roms")
 
     cmd = backup.build_rsync_command(small[0], dry_run=True, ud=ud, backup=bk)
     check("dry-run flag present", "--dry-run" in cmd)
@@ -164,6 +164,22 @@ def test_backup(tmp: Path) -> None:
     check("media exclude rendered", any(a == "--exclude=media/" for a in rcmd))
     check("medium roms -> roms/ dir under the configured dest",
           rcmd[-1] == "root@backup.example:/backups/batocera/roms/")
+
+    # The dest runs in the REMOTE shell (via --rsync-path), so a dest with a
+    # space or shell metacharacter must be quoted, never word-split or executed.
+    spaced = {"host": "h", "port": 22, "user": "root", "dest": "/mnt/Volume 1/backups"}
+    scmd = backup.build_rsync_command(small[0], ud=ud, backup=spaced)
+    rp = next(a for a in scmd if a.startswith("--rsync-path="))
+    check("rsync-path quotes a dest containing spaces",
+          "'/mnt/Volume 1/backups/userdata/saves'" in rp)
+    check("rsync-path never mkdir's the bare unquoted spaced path",
+          "mkdir -p /mnt/Volume 1/backups" not in rp)
+    evil = {"host": "h", "port": 22, "user": "root", "dest": "/x; rm -rf /y"}
+    ecmd = backup.build_rsync_command(small[0], ud=ud, backup=evil)
+    erp = next(a for a in ecmd if a.startswith("--rsync-path="))
+    check("rsync-path wraps an injected ';' inside a single-quoted string",
+          "'/x; rm -rf /y/userdata/saves'" in erp
+          and erp == "--rsync-path=mkdir -p '/x; rm -rf /y/userdata/saves' && rsync")
 
     check("progress parse 47%", backup.parse_progress("  1,234  47%  1.2MB/s  0:00:03") == 47)
     check("progress parse none", backup.parse_progress("sending incremental file list") is None)
@@ -287,6 +303,20 @@ def test_bios(tmp: Path) -> None:
     check("batocera_version reads first token", bios.batocera_version() == "43.1")
     check("batocera_version missing file -> unknown",
           bios.batocera_version(str(tmp / "nope.version")) == "unknown")
+
+    # run_check must RAISE (not return []) when the tool can't run, so a check
+    # that never happened is never rendered as a green "no problems".
+    os.environ["TOOLBOX_BIOS_CMD"] = str(tmp / "no-such-batocera-systems-bin")
+    raised = False
+    try:
+        bios.run_check()
+    except RuntimeError:
+        raised = True
+    finally:
+        os.environ.pop("TOOLBOX_BIOS_CMD", None)
+    check("run_check raises when the tool is missing (no false green)", raised)
+    check("run_check with injected text still returns parsed results",
+          len(bios.run_check(_BIOS_SAMPLE)) == 4)
 
 
 def test_restore(tmp: Path) -> None:
@@ -458,6 +488,14 @@ def test_library(tmp: Path) -> None:
           "./Streets (USA).md" in hidden)
     check("gamelist backup written before edit",
           any(c.name.startswith("gamelist.xml.bak-toolbox-") for c in gen.iterdir()))
+    check("gamelist write is atomic (no .tmp-toolbox left)",
+          not list(gen.glob("*.tmp-toolbox")))
+
+    # Convergence: after applying, a re-plan finds nothing to hide (the already-
+    # hidden variants are excluded), so the system reaches "already deduped"
+    # instead of re-listing the same copies forever.
+    sp2 = library.plan_system("genesis")
+    check("re-plan after apply has nothing left to hide", sp2.hide == [])
 
 
 def test_perf(tmp: Path) -> None:
@@ -658,6 +696,17 @@ def test_logs(tmp: Path) -> None:
     ll = logs.parse_last_launch(two)
     check("logs picks the last launch", ll.system == "n64" and ll.game == "B.z64")
 
+    # A ROM name with an apostrophe is emitted by Python's repr with DOUBLE
+    # quotes: PosixPath("Assassin's Creed.nes"). The launch must still parse
+    # (before, it was invisible and the card showed the previous game).
+    apos = ("2026 'gameStart', 'nes', 'libretro', 'fceumm', "
+            "PosixPath(\"/userdata/roms/nes/Assassin's Creed.nes\")]\n"
+            "2026 launch Exiting configgen with status 139\n")
+    ll = logs.parse_last_launch(apos)
+    check("logs parses a double-quoted PosixPath (apostrophe in name)",
+          ll is not None and ll.game == "Assassin's Creed.nes")
+    check("logs apostrophe-launch status parsed", ll.status == 139)
+
     stderr = ("evmapy: no process found\n"
               "2026 ERROR (foo.py:1):runCommand boom\n"
               "/x: No such file or directory\n")
@@ -708,6 +757,69 @@ def test_logs(tmp: Path) -> None:
     del os.environ["TOOLBOX_LOG_DIR"]
 
 
+def test_safe_writes(tmp: Path) -> None:
+    """The atomic + capped-backup + fail-loud-read invariants that keep a
+    transient read error or a power cut from wiping batocera.conf/gamelist."""
+    from toolbox.core import config, shaders
+    print("[safe_writes]")
+
+    conf = tmp / "sw" / "batocera.conf"
+    conf.parent.mkdir(parents=True, exist_ok=True)
+    os.environ["TOOLBOX_BATOCERA_CONF"] = str(conf)
+    try:
+        # absent conf reads as "" (a fresh cabinet), never an error
+        check("read_conf_text: absent -> ''", config.read_conf_text() == "")
+
+        conf.write_text("keep.this=1\nother=2\n", encoding="utf-8")
+        check("read_conf_text: present -> contents",
+              "keep.this=1" in config.read_conf_text())
+
+        # write is atomic (no temp left) and backs up the prior file
+        config.write_batocera_conf("keep.this=1\nother=3\n")
+        check("write_batocera_conf: content written",
+              "other=3" in conf.read_text(encoding="utf-8"))
+        check("write_batocera_conf: leaves no .tmp-toolbox",
+              not list(conf.parent.glob("*.tmp-toolbox")))
+        check("write_batocera_conf: backed up the old file",
+              any(p.name.startswith("batocera.conf.bak-toolbox-")
+                  for p in conf.parent.iterdir()))
+
+        # backups are capped at BACKUP_KEEP (the bug: perf/shaders/library used
+        # to never prune) -- exercise the shared helper directly.
+        for i in range(8):
+            (conf.parent / f"batocera.conf.bak-toolbox-2026010{i}-000000").write_text("x")
+        config.prune_backups(conf, keep=config.BACKUP_KEEP)
+        kept = list(conf.parent.glob("batocera.conf.bak-toolbox-*"))
+        check("prune caps conf backups at BACKUP_KEEP", len(kept) == config.BACKUP_KEEP)
+
+        # THE wipe guard: a present-but-unreadable conf must RAISE, not read "".
+        # Pointing the conf path at a directory makes read_text raise OSError
+        # deterministically on every platform.
+        baddir = tmp / "sw" / "confdir"
+        baddir.mkdir(parents=True, exist_ok=True)
+        os.environ["TOOLBOX_BATOCERA_CONF"] = str(baddir)
+        raised = False
+        try:
+            config.read_conf_text()
+        except OSError:
+            raised = True
+        check("read_conf_text raises on an unreadable (non-absent) conf", raised)
+
+        # set_renderer must inherit that: on a read failure it raises and writes
+        # NOTHING, rather than rewriting the conf down to one shader line.
+        before = sorted(p.name for p in baddir.iterdir())
+        raised = False
+        try:
+            shaders.set_renderer("snes", shaders.INHERIT)
+        except OSError:
+            raised = True
+        after = sorted(p.name for p in baddir.iterdir())
+        check("set_renderer raises instead of wiping when the conf won't read",
+              raised and before == after)
+    finally:
+        os.environ.pop("TOOLBOX_BATOCERA_CONF", None)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d)
@@ -726,6 +838,7 @@ def main() -> int:
         test_cheevos(tmp)
         test_portmeta(tmp)
         test_logs(tmp)
+        test_safe_writes(tmp)
     print(f"\n{PASS} OK, {FAIL} NO")
     return 1 if FAIL else 0
 

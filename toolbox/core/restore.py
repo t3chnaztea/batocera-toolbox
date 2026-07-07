@@ -16,6 +16,7 @@ ok/failed accounting.
 """
 from __future__ import annotations
 
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,16 +91,22 @@ def parse_remote_listing(text: str) -> list[str]:
     return [c for c in CATEGORIES if c in present]
 
 
-def list_remote_categories(backup_cfg: dict | None = None) -> list[str]:
+def list_remote_categories(backup_cfg: dict | None = None) -> list[str] | None:
     """SSH the NAS and return the categories whose backup path exists.
 
     Each category maps to a specific remote path (some nested, e.g.
     userdata/saves), so we test each path's existence rather than listing one
-    directory. Returns [] on any error.
+    directory.
+
+    Returns ``None`` when the NAS couldn't be REACHED (host down, timeout, auth
+    rejected: ssh exit 255 or a spawn error) so the UI can say "check the
+    connection" instead of "nothing to restore". A reached NAS with no backups
+    yet returns ``[]``. The per-path ``test`` chain's own exit code (0/1) is
+    normal and does not signal a connection error.
     """
     backup_cfg = backup_cfg or config.backup_config()
     dest = backup_cfg["dest"]
-    checks = " ; ".join(f'test -e "{dest}/{remote}" && echo {cat}'
+    checks = " ; ".join(f"test -e {shlex.quote(f'{dest}/{remote}')} && echo {cat}"
                         for cat, (remote, _local) in CATEGORIES.items())
     cmd = ["ssh", "-p", str(backup_cfg["port"]),
            "-o", "StrictHostKeyChecking=accept-new",
@@ -107,9 +114,9 @@ def list_remote_categories(backup_cfg: dict | None = None) -> list[str]:
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.SubprocessError):
-        return []
-    if proc.returncode != 0 and not proc.stdout:
-        return []
+        return None
+    if proc.returncode == 255:      # ssh's own "couldn't connect / auth failed"
+        return None
     return parse_remote_listing(proc.stdout or "")
 
 

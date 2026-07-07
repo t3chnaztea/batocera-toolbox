@@ -16,8 +16,6 @@ write backs up `batocera.conf.bak-toolbox-*` first, mirroring the Shaders module
 from __future__ import annotations
 
 import re
-import time
-from pathlib import Path
 
 from . import config
 
@@ -94,16 +92,12 @@ def read_overclock(text: str) -> dict:
 
 
 def read_conf() -> str:
-    try:
-        return config.batocera_conf().read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    """Read batocera.conf. Empty only when genuinely absent; a present-but-
+    unreadable conf RAISES so its snapshot is never rewritten over the real file
+    (see config.read_conf_text)."""
+    return config.read_conf_text()
 
 
 def write_conf(text: str) -> None:
-    """Back up batocera.conf (timestamped), then write the new text."""
-    conf = config.batocera_conf()
-    if conf.is_file():
-        bak = conf.with_name(f"batocera.conf.bak-toolbox-{time.strftime('%Y%m%d-%H%M%S')}")
-        bak.write_bytes(conf.read_bytes())
-    conf.write_text(text, encoding="utf-8")
+    """Back up (capped) batocera.conf, then write the new text atomically."""
+    config.write_batocera_conf(text)
