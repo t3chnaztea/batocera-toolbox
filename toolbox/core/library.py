@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import os
 import re
-import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 
@@ -223,10 +222,17 @@ def eligible_systems() -> list:
 
 
 def plan_system(system: str) -> SystemPlan:
-    """Build the hide plan for one system (Favorites excluded from hiding)."""
+    """Build the hide plan for one system (Favorites excluded from hiding).
+
+    Winner selection sees ALL variants, but a variant that is ALREADY hidden is
+    left out of the plan: there is nothing to do for it. Without this, every
+    re-run re-lists the copies a previous apply already hid, so the system shows
+    "TO HIDE N" forever and never reaches the deduped state.
+    """
     gl = config.roms_dir() / system / "gamelist.xml"
     games = _read_games(gl) if gl.is_file() else []
     fav_paths = {pv for pv, fav, _ in games if fav}
+    hidden_paths = {pv for pv, _, hid in games if hid}
     groups = group_games([parse_name(pv) for pv, _, _ in games])
 
     hide: list = []
@@ -240,6 +246,8 @@ def plan_system(system: str) -> SystemPlan:
         for path in dec.hide:
             if path in fav_paths:
                 fav_protected += 1
+            elif path in hidden_paths:
+                continue                     # already hidden: nothing to do
             else:
                 hide.append(path)
     return SystemPlan(system=system, hide=hide, n_keep=len(games) - len(hide),
@@ -254,8 +262,9 @@ def apply_hides(system: str, paths: list) -> ApplyResult:
     tree = ET.parse(gl)
     root = tree.getroot()
 
-    ts = time.strftime("%Y%m%d-%H%M%S")
-    gl.with_name(f"gamelist.xml.bak-toolbox-{ts}").write_bytes(gl.read_bytes())
+    # Capped, timestamped backup before the edit (shared with portmeta/perf/
+    # shaders so the retention cap is enforced everywhere, not just portmeta).
+    config.backup_file(gl)
 
     res = ApplyResult()
     for g in root.findall("game"):
@@ -271,5 +280,7 @@ def apply_hides(system: str, paths: list) -> ApplyResult:
         h.text = "true"
         res.hidden += 1
 
-    tree.write(gl, encoding="utf-8", xml_declaration=True)
+    # Atomic write (temp + os.replace): a power cut can't leave EmulationStation
+    # a truncated gamelist to parse on boot.
+    config.atomic_write_tree(tree, gl)
     return res
