@@ -15,6 +15,7 @@ failure count, so a partial failure is never swallowed.
 from __future__ import annotations
 
 import re
+import shlex
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -59,9 +60,12 @@ def tier_sources(tier: str) -> list[BackupSource]:
         ]
     if tier == "everything":
         # Exactly the scheduled job's two legs: /userdata (minus roms) ->
-        # userdata/, and /userdata/roms -> roms/.
+        # userdata/, and /userdata/roms -> roms/. The exclude is ANCHORED
+        # (leading slash) so it drops only /userdata/roms, not every dir named
+        # "roms" nested deeper (e.g. an emulator's own roms/ under system/) --
+        # those must stay in the "everything" leg or they'd be in no leg at all.
         return [
-            BackupSource("", "userdata", ["roms/"]),
+            BackupSource("", "userdata", ["/roms/"]),
             BackupSource("roms", "roms"),
         ]
     raise ValueError(f"unknown backup tier: {tier!r}")
@@ -99,8 +103,10 @@ def build_rsync_command(src: BackupSource, *, dry_run: bool = False,
         cmd.append(f"--exclude={e}")
     cmd += ["-e", f"ssh -p {backup['port']} -o StrictHostKeyChecking=accept-new"]
     # mkdir the full per-leg dest (it can be nested, e.g. userdata/system/configs)
-    # so a leg is self-sufficient even on a fresh NAS dataset.
-    cmd.append(f"--rsync-path=mkdir -p {remote_dir} && rsync")
+    # so a leg is self-sufficient even on a fresh NAS dataset. The dest is
+    # user-supplied and runs in the REMOTE shell here, so quote it: a path with a
+    # space would split into wrong dirs, and shell metacharacters would execute.
+    cmd.append(f"--rsync-path=mkdir -p {shlex.quote(remote_dir)} && rsync")
     # Trailing slash on source: copy its CONTENTS into the dest folder.
     cmd += [f"{src_path}/", remote]
     return cmd

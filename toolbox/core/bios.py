@@ -132,15 +132,20 @@ def batocera_version(path: str | None = None) -> str:
 def run_check(text: str | None = None) -> list[SystemBios]:
     """Run ``batocera-systems`` (or parse injected ``text``) into results.
 
-    Returns ``[]`` if the tool is missing or errors, so the UI can show an
-    empty state instead of crashing on a non-cabinet host.
+    RAISES ``RuntimeError`` if the tool is missing, times out, or exits non-zero.
+    A check that never ran must NOT look like a clean pass: an empty list here
+    means "ran, found no problems" (a real green), never "couldn't run".
     """
     if text is None:
         cmd = os.environ.get("TOOLBOX_BIOS_CMD", "batocera-systems")
         try:
             proc = subprocess.run([cmd], capture_output=True, text=True, timeout=120)
-        except (OSError, subprocess.SubprocessError):
-            return []
+        except (OSError, subprocess.SubprocessError) as e:
+            raise RuntimeError(f"couldn't run {cmd}: {e}") from e
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            raise RuntimeError(f"{cmd} exited {proc.returncode}"
+                               + (f": {detail[-1]}" if detail else ""))
         text = proc.stdout or ""
     return parse_systems_output(text)
 
