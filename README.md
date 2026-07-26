@@ -31,7 +31,7 @@ Two design choices keep it trustworthy:
   `batocera-systems` (the tool that ships *with* the OS), so the report always
   reflects whatever version you're actually running.
 - **Push-only, dry-run-first backups.** Backup and Restore are plain `rsync`
-  over SSH and **never pass `--delete`** — they can only add or update files,
+  over SSH and **never pass `--delete`**. They can only add or update files,
   never remove them. Restore previews (dry-run) by default.
 
 ## Screens
@@ -73,7 +73,7 @@ previews. See [Configuration](#configuration) to point it at your server.
 ### ROM Audit
 Fast, read-only dashboard. Per system: ROM count, scraped %, missing artwork,
 gamelist orphans/duplicates, same-name dup count. Reads the live tree +
-`gamelist.xml` only — it does not hash or verify against DATs. The scan shows a
+`gamelist.xml` only: it does not hash or verify against DATs. The scan shows a
 live `N/total` progress bar and `Esc`/`B` cancels it back to the menu; read-only
 scans (audit/BIOS/restore-list/library) all run on a crash-safe worker that
 surfaces an error screen instead of hanging if something goes wrong.
@@ -265,6 +265,14 @@ without pygame, a network, or a real `/userdata`.
 ```bash
 python3 tests/selftest.py      # 198 assertions, no pygame/network needed
 ```
+
+## More tiny tools for home labs
+
+Agent skills: [unifi](https://github.com/t3chnaztea/unifi-skills) · [home-assistant](https://github.com/t3chnaztea/home-assistant-skills) · [batocera](https://github.com/t3chnaztea/batocera-skills) · [psn](https://github.com/t3chnaztea/awesome-psn-skills)  
+Retro cabinet: [batocera-holidays](https://github.com/t3chnaztea/batocera-holidays)  
+Home server: [dell-ipmi-fan-control](https://github.com/t3chnaztea/dell-ipmi-fan-control) · [plex-preroll-roulette](https://github.com/t3chnaztea/plex-preroll-roulette)  
+PlayStation: [awesome-psnstats](https://github.com/t3chnaztea/awesome-psnstats)  
+Desktop: [fastfetch-macos-gradient-hud](https://github.com/t3chnaztea/fastfetch-macos-gradient-hud)
 
 ## License
 
