@@ -268,7 +268,7 @@ python3 tests/selftest.py      # 198 assertions, no pygame/network needed
 
 ## More tiny tools for home labs
 
-Agent skills: [unifi](https://github.com/t3chnaztea/unifi-skills) · [home-assistant](https://github.com/t3chnaztea/home-assistant-skills) · [batocera](https://github.com/t3chnaztea/batocera-skills) · [psn](https://github.com/t3chnaztea/awesome-psn-skills)  
+Agent skills: [unifi](https://github.com/t3chnaztea/unifi-skills) · [home-assistant](https://github.com/t3chnaztea/home-assistant-skills) · [batocera](https://github.com/t3chnaztea/batocera-skills) · [psn](https://github.com/t3chnaztea/awesome-psn-skills) · [arr-stack](https://github.com/t3chnaztea/arr-stack-skills)  
 Retro cabinet: [batocera-holidays](https://github.com/t3chnaztea/batocera-holidays)  
 Home server: [dell-ipmi-fan-control](https://github.com/t3chnaztea/dell-ipmi-fan-control) · [plex-preroll-roulette](https://github.com/t3chnaztea/plex-preroll-roulette)  
 PlayStation: [awesome-psnstats](https://github.com/t3chnaztea/awesome-psnstats)  
