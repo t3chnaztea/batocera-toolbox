@@ -363,6 +363,62 @@ def test_restore(tmp: Path) -> None:
     check("empty listing -> []", restore.parse_remote_listing("") == [])
 
 
+def test_romarr_sync(tmp: Path) -> None:
+    from toolbox.core import romarr_sync
+    print("[romarr_sync]")
+    ud = tmp / "userdata"
+    roms = ud / "roms"
+    bk = {"host": "backup.example", "port": 32, "user": "root", "dest": "/srv/nas/Batocera"}
+    os.environ["TOOLBOX_ROMARR_STAGING"] = "/srv/nas/Media/ROMs"
+
+    local = ["snes", "megadrive", "gb", "nes"]
+    check("mapped slug wins: genesis-slash-megadrive -> megadrive",
+          romarr_sync.resolve_dest("genesis-slash-megadrive", local) == "megadrive")
+    check("identity slug passes when local dir exists",
+          romarr_sync.resolve_dest("snes", local) == "snes")
+    check("sms maps to mastersystem even if not in local list",
+          romarr_sync.resolve_dest("sms", local) == "mastersystem")
+    check("unknown slug with no local dir is skipped (None)",
+          romarr_sync.resolve_dest("palm-os", local) is None)
+    check("arcade is deliberately unmapped",
+          romarr_sync.resolve_dest("arcade", local) is None)
+
+    listing = ("./snes/Chrono Trigger (USA).sfc\n"
+               "./snes/EarthBound (USA).sfc\n"
+               "./genesis-slash-megadrive/Comix Zone (USA).md\n"
+               "./psx/Tomba (USA)/Tomba (USA).cue\n"
+               "./psx/Tomba (USA)/Tomba (USA).bin\n"
+               "junkline\n")
+    pending = romarr_sync.parse_pending(listing, local)
+    check("pending groups by first path component, sorted",
+          [p.slug for p in pending] == ["genesis-slash-megadrive", "psx", "snes"])
+    check("multi-disc subfolder files count toward the slug",
+          next(p for p in pending if p.slug == "psx").n_files == 2)
+    check("snes counts two files",
+          next(p for p in pending if p.slug == "snes").n_files == 2)
+    check("psx unmapped here (no local psx dir)",
+          next(p for p in pending if p.slug == "psx").dest is None)
+
+    cmd = romarr_sync.build_sync_command("genesis-slash-megadrive", "megadrive",
+                                         dry_run=True, roms=roms, backup_cfg=bk)
+    check("sync source is the staging slug dir",
+          cmd[-2] == "root@backup.example:/srv/nas/Media/ROMs/genesis-slash-megadrive/")
+    check("sync dest is the MAPPED local system dir",
+          cmd[-1] == f"{roms / 'megadrive'}/")
+    check("sync moves: --remove-source-files present",
+          "--remove-source-files" in cmd)
+    check("sync dry-run flag present", "--dry-run" in cmd)
+    check("sync never has --delete", "--delete" not in cmd)
+    check("sync ssh -e uses port 32", any("ssh -p 32" in a for a in cmd))
+    rcmd = romarr_sync.build_sync_command("snes", "snes", roms=roms, backup_cfg=bk)
+    check("real run omits --dry-run", "--dry-run" not in rcmd)
+
+    check("every SLUG_MAP value is a plausible batocera dir (lowercase, no slash)",
+          all(v == v.lower() and "/" not in v for v in romarr_sync.SLUG_MAP.values()))
+    check("staging path env override wins",
+          romarr_sync.staging_path() == "/srv/nas/Media/ROMs")
+
+
 def test_library(tmp: Path) -> None:
     from toolbox.core import config, library
     import xml.etree.ElementTree as ET
@@ -833,6 +889,7 @@ def main() -> int:
         test_shaders(tmp)
         test_bios(tmp)
         test_restore(tmp)
+        test_romarr_sync(tmp)
         test_library(tmp)
         test_perf(tmp)
         test_cheevos(tmp)

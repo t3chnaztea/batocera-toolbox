@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pygame
 
-from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos, logs
+from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos, logs, romarr_sync
 from . import controls
 from .controls import UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, SELECT, QUIT
 
@@ -125,6 +125,15 @@ class App:
         self.bios_done = False
         self.bios_index = 0
 
+        # romarr sync state
+        self.rr_pending: list[romarr_sync.PendingSystem] = []
+        self.rr_listed = False
+        self.romarr_dryrun = True           # safe default: preview first
+        self.rr_leg = ""
+        self.rr_pct = 0
+        self.rr_done = False
+        self.rr_result: romarr_sync.SyncResult | None = None
+
         # restore state
         self.rs_cats: list[str] = []
         self.rs_cat = ""
@@ -199,12 +208,12 @@ class App:
     # the menu. NOT the write-progress screens (backup/restore/library apply),
     # where bailing would orphan a running rsync mid-write.
     CANCELLABLE_LOADING = {"audit_loading", "bios_loading", "restore_loading",
-                           "library_loading", "cheevos_loading"}
+                           "library_loading", "cheevos_loading", "romarr_loading"}
 
     # Done-flag attribute for every worker, cleared together on cancel/error so a
     # stale flag can't immediately re-trigger _poll_workers after we bail out.
     _DONE_FLAGS = ("audit_done", "bios_done", "rs_listed", "lib_done", "ch_done",
-                   "bk_done", "rs_done", "lib_apply_done")
+                   "bk_done", "rs_done", "lib_apply_done", "rr_listed", "rr_done")
 
     def _clear_done_flags(self) -> None:
         for attr in self._DONE_FLAGS:
@@ -248,6 +257,7 @@ class App:
     # MAIN MENU
     # ===================================================================
     MAIN_ITEMS = [("Backup", "backup"), ("Restore", "restore"),
+                  ("ROMarr Sync", "romarr"),
                   ("ROM Audit", "audit_run"), ("BIOS Check", "bios_run"),
                   ("Shaders", "shaders"), ("Library (1G1R)", "library"),
                   ("Performance", "perf"), ("RetroAchievements", "cheevos"), ("Crash Logs", "logs"),
@@ -305,6 +315,12 @@ class App:
         self.rs_cats = []
         self._spawn(self._restore_list_thread, "rs_listed")
         self.state = "restore_loading"
+
+    def _enter_romarr(self) -> None:
+        self.rr_listed = False
+        self.rr_pending = []
+        self._spawn(self._romarr_list_thread, "rr_listed")
+        self.state = "romarr_loading"
 
     def _enter_library(self) -> None:
         self.lib_plans = []
@@ -729,6 +745,130 @@ class App:
                    int(self.H * 0.46), color=WHITE)
         self._bar(self.rs_pct, int(self.H * 0.54))
         self._hint(["please wait..."])
+
+    # ===================================================================
+    # ROMARR SYNC (drain NAS staging into /userdata/roms; dry-run by default)
+    # ===================================================================
+    def _romarr_list_thread(self) -> None:
+        self.rr_pending = romarr_sync.list_pending()
+        self.rr_listed = True
+
+    def draw_romarr_loading(self) -> None:
+        self._title("ROMARR SYNC")
+        self._text(self.f_mid, "Checking the NAS staging folder...",
+                   int(self.H * 0.45), color=TEAL)
+        self._hint(["Esc/B: cancel"])
+
+    def on_romarr(self, action: str) -> None:
+        if action == BACK:
+            self.state, self.menu_index = "main", 0
+            return
+        if not any(p.dest for p in self.rr_pending):
+            return
+        if action == SELECT:
+            self.romarr_dryrun = not self.romarr_dryrun
+        elif action == CONFIRM:
+            self.state = "romarr_confirm"
+
+    def draw_romarr(self) -> None:
+        self._title("ROMARR SYNC")
+        cfg = config.backup_config()
+        self._text(self.f_small,
+                   f"pull FROM  {cfg['user']}@{cfg['host']}:{romarr_sync.staging_path()}",
+                   int(self.H * 0.20), color=DIM)
+        mapped = [p for p in self.rr_pending if p.dest]
+        skipped = [p for p in self.rr_pending if not p.dest]
+        if not mapped:
+            if not romarr_sync.staging_path() or not cfg.get("host"):
+                self._text(self.f_mid, "Not configured yet.", int(self.H * 0.42), color=PINK)
+                self._text(self.f_small,
+                           'settings.json needs backup.host and romarr.staging (see README)',
+                           int(self.H * 0.52), color=DIM)
+                self._hint(["Esc/B: back"])
+                return
+            self._text(self.f_mid, "Staging is empty. Nothing to sync.",
+                       int(self.H * 0.45), color=GREEN)
+            if skipped:
+                self._text(self.f_small,
+                           "unmapped, left in staging: " + ", ".join(p.slug for p in skipped),
+                           int(self.H * 0.55), color=PINK)
+            self._hint(["Esc/B: back"])
+            return
+        top = int(self.H * 0.28)
+        rh = int(self.row_h * 0.9)
+        for i, p in enumerate(mapped[:12]):
+            self._text(self.f_small, f"{p.dest:<16} {p.n_files:>4} file(s)",
+                       top + i * rh, color=WHITE, left=int(self.W * 0.20))
+        y = top + min(len(mapped), 12) * rh
+        if skipped:
+            self._text(self.f_small,
+                       "skipped (unmapped): " + ", ".join(p.slug for p in skipped),
+                       y + rh, color=PINK)
+        mode = "DRY-RUN (preview)" if self.romarr_dryrun else "REAL (moves files)"
+        self._text(self.f_small, f"Mode: {mode}", int(self.H * 0.80),
+                   color=TEAL if self.romarr_dryrun else PINK)
+        self._hint(["X/Space: toggle mode", "Enter/A: sync all", "Esc/B: back"])
+
+    def on_romarr_confirm(self, action: str) -> None:
+        if action == CONFIRM:
+            self.rr_done = False
+            self.rr_result = None
+            self.rr_leg, self.rr_pct = "", 0
+            self._spawn(self._romarr_thread, "rr_done")
+            self.state = "romarr_progress"
+        elif action == BACK:
+            self.state = "romarr"
+
+    def draw_romarr_confirm(self) -> None:
+        self._title("CONFIRM SYNC")
+        mapped = [p for p in self.rr_pending if p.dest]
+        n = sum(p.n_files for p in mapped)
+        self._text(self.f_mid, f"{n} file(s) across {len(mapped)} system(s) -> /userdata/roms",
+                   int(self.H * 0.38), color=WHITE)
+        if self.romarr_dryrun:
+            self._text(self.f_mid, "DRY-RUN (nothing moved)", int(self.H * 0.48), color=TEAL)
+        else:
+            self._text(self.f_mid, "REAL sync: MOVES files out of staging",
+                       int(self.H * 0.48), color=PINK)
+        self._text(self.f_small, "adds files only; never deletes anything local",
+                   int(self.H * 0.58), color=DIM)
+        self._hint(["Enter/A: start", "Esc/B: back"])
+
+    def _romarr_thread(self) -> None:
+        def cb(leg: str, pct: int) -> None:
+            self.rr_leg, self.rr_pct = leg, pct
+        self.rr_result = romarr_sync.run_sync(
+            self.rr_pending, dry_run=self.romarr_dryrun, on_progress=cb)
+        self.rr_done = True
+
+    def draw_romarr_progress(self) -> None:
+        self._title("SYNCING")
+        self._text(self.f_mid, "dry-run" if self.romarr_dryrun else "moving from staging",
+                   int(self.H * 0.36), color=GREEN)
+        self._text(self.f_small, f"current: {self.rr_leg}" if self.rr_leg else "starting rsync...",
+                   int(self.H * 0.46), color=WHITE)
+        self._bar(self.rr_pct, int(self.H * 0.54))
+        self._hint(["please wait..."])
+
+    def on_romarr_restart(self, action: str) -> None:
+        if action == CONFIRM:
+            romarr_sync.request_es_restart()
+            self.running = False          # exit; launcher restarts ES on the sentinel
+        elif action == BACK:
+            self.state, self.menu_index = "main", 0
+
+    def draw_romarr_restart(self) -> None:
+        self._title("SYNC COMPLETE")
+        r = self.rr_result
+        n = r.ok if r else 0
+        self._text(self.f_mid, f"{n} system(s) updated.", int(self.H * 0.38), color=GREEN)
+        self._text(self.f_mid, "Restart EmulationStation to see the new games?",
+                   int(self.H * 0.48), color=WHITE)
+        self._text(self.f_small, "Restarting closes Toolbox. Esc keeps playing; the",
+                   int(self.H * 0.58), color=DIM)
+        self._text(self.f_small, "games appear on the next ES restart either way.",
+                   int(self.H * 0.63), color=DIM)
+        self._hint(["Enter/A: restart ES now", "Esc/B: later"])
 
     # ===================================================================
     # LIBRARY (1G1R): hide redundant regional/revision variants in gamelist
@@ -1201,6 +1341,25 @@ class App:
             else:
                 self._flash("Restore failed to start", "main")
             self.rs_done = False
+        elif self.state == "romarr_loading" and self.rr_listed:
+            self.state, self.menu_index = "romarr", 0
+            self.rr_listed = False
+        elif self.state == "romarr_progress" and self.rr_done:
+            self.rr_done = False
+            r = self.rr_result
+            if not r:
+                self._flash("Sync failed to start", "main")
+            elif r.failed:
+                self._flash(f"Sync: {r.ok} OK, {r.failed} FAILED", "main",
+                            "check the NAS path / SSH key")
+            elif self.romarr_dryrun:
+                self._flash(f"Dry-run OK: {r.ok} system(s) would sync", "main",
+                            "toggle mode and run again to move files")
+            elif r.ok == 0:
+                self._flash("Nothing synced", "main",
+                            "all pending systems were unmapped")
+            else:
+                self.state = "romarr_restart"
         elif self.state == "library_loading" and self.lib_done:
             self.state, self.menu_index, self.lib_index = "library_systems", 0, 0
             self.lib_done = False
