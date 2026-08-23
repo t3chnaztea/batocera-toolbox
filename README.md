@@ -6,9 +6,9 @@
 > Toolbox issues here, not to the Batocera team.
 
 A couch-friendly, gamepad-driven utility **Port** for [Batocera](https://batocera.org).
-One app, ten modules: **Backup**, **Restore**, **ROM Audit**, **BIOS Check**,
-**Shaders**, **Library (1G1R)**, **Performance**, **RetroAchievements**,
-**Crash Logs**, and **Controller setup**. It installs into the PORTS menu and runs entirely on the
+One app, eleven modules: **Backup**, **Restore**, **ROMarr Sync**, **ROM Audit**,
+**BIOS Check**, **Shaders**, **Library (1G1R)**, **Performance**,
+**RetroAchievements**, **Crash Logs**, and **Controller setup**. It installs into the PORTS menu and runs entirely on the
 machine, so you maintain your cabinet from the couch instead of SSHing in.
 
 It uses a RetroArch RGUI look (phosphor green on near-black, double-line border,
@@ -69,6 +69,39 @@ mirror image: it pulls a category (`saves`, `configs`, `roms`, or the whole
 `userdata` tree) back to `/userdata`, lists only the categories that actually
 exist on the server, and **defaults to dry-run** so the first action always
 previews. See [Configuration](#configuration) to point it at your server.
+
+### ROMarr Sync
+
+If you run [ROMarr](https://github.com/BlizzHacker/romarr) (the *arr for
+games) on a server, this is the last hop: ROMarr verifies downloads against
+your No-Intro/Redump DATs and files them into a staging directory; this module
+drains that staging into the live `/userdata/roms` and offers an
+EmulationStation restart so the new games appear. Request a game from your
+phone, sync it in from the couch.
+
+- **Move, not copy** (`--remove-source-files`): staging stays a clean queue,
+  nothing syncs twice. Never `--delete`; the sync only adds files locally.
+- **Dry-run by default.** The first press always previews.
+- **Slug translation.** ROMarr's platform slugs are not Batocera folder names;
+  `core/romarr_sync.py:SLUG_MAP` carries the differences
+  (`genesis-slash-megadrive` -> `megadrive`, `sms` -> `mastersystem`, ...). A
+  slug that is neither mapped nor an existing local system folder is skipped
+  and shown, never guessed into a new folder. Arcade slugs are deliberately
+  unmapped: MAME/FBNeo sets are romset-version-locked and must not be dropped
+  in loose.
+
+Configure it in `settings.json` beside the backup block (same server and SSH
+key as Backup; only the staging path is ROMarr-specific):
+
+```json
+{
+  "backup":  { "host": "192.168.1.10", "port": 22, "user": "backup",
+               "dest": "/srv/backups/batocera" },
+  "romarr":  { "staging": "/srv/media/ROMs" }
+}
+```
+
+Until both are set, the module shows "Not configured yet."
 
 ### ROM Audit
 Fast, read-only dashboard. Per system: ROM count, scraped %, missing artwork,
@@ -212,8 +245,8 @@ overlays a frame on this app. If you see one, set `ports.bezel=none` in
 
 ## Configuration
 
-The Audit, BIOS, Shaders, and Controller modules need no setup. **Backup and
-Restore** need a target server, which ships blank so nothing is assumed about
+The Audit, BIOS, Shaders, and Controller modules need no setup. **Backup,
+Restore, and ROMarr Sync** need a target server, which ships blank so nothing is assumed about
 your network. Create
 `/userdata/saves/ports/toolbox/settings.json` on the machine:
 
