@@ -13,5 +13,7 @@ python3 -m toolbox
 # process comm to 15 chars, so the 16-char name never matches pkill's default.
 if [ -f /tmp/toolbox-es-restart ]; then
     rm -f /tmp/toolbox-es-restart
-    kill -9 "$(pidof emulationstation)" 2>/dev/null
+    # Unquoted on purpose: pidof prints space-separated PIDs, kill each one.
+    # shellcheck disable=SC2046
+    kill -9 $(pidof emulationstation) 2>/dev/null
 fi
