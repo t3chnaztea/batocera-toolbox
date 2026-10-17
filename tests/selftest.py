@@ -583,6 +583,8 @@ def test_perf(tmp: Path) -> None:
     t = perf.set_key(t, "snes.ratio", "16/9")
     check("set_key replaces existing", perf.get_key(t, "snes.ratio") == "16/9")
     check("set_key leaves others intact", perf.get_key(t, "global.bezel") == "thebezelproject")
+    t2 = perf.set_key(t, "snes.ratio", r"C:\1\g<0>")
+    check("set_key writes backslashes literally", perf.get_key(t2, "snes.ratio") == r"C:\1\g<0>")
     t2 = perf.remove_key(t, "nes.runahead")
     check("remove_key drops the line", perf.get_key(t2, "nes.runahead") is None)
     check("remove_key missing is a no-op", perf.remove_key(base, "x.y") == base)

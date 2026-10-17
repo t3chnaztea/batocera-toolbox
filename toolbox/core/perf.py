@@ -48,7 +48,7 @@ def set_key(text: str, key: str, value: str) -> str:
     pat = re.compile(r"^" + re.escape(key) + r"=.*$", re.MULTILINE)
     line = f"{key}={value}"
     if pat.search(text):
-        return pat.sub(line, text, count=1)
+        return pat.sub(lambda _m: line, text, count=1)
     sep = "" if text == "" or text.endswith("\n") else "\n"
     return text + sep + line + "\n"
 
