@@ -61,14 +61,19 @@ Three backup tiers:
 | Tier | Contents |
 |------|----------|
 | Small | `saves` (saves + states) + `system/configs` |
-| Medium | Small + `roms` (scraped media excluded to stay lean) |
+| Medium | Small + `roms` only. **No cover art, videos, or manuals** (scraped media folders are skipped to stay lean; `gamelist.xml` files are kept, so their art paths point at files this tier does not carry). Use Everything to keep art. |
 | Everything | the whole `/userdata` tree + ROMs |
 
 Backups land in `<dest>/userdata/...` and `<dest>/roms/`. **Restore** is the
 mirror image: it pulls a category (`saves`, `configs`, `roms`, or the whole
 `userdata` tree) back to `/userdata`, lists only the categories that actually
 exist on the server, and **defaults to dry-run** so the first action always
-previews. See [Configuration](#configuration) to point it at your server.
+previews. A real restore of `configs`, `roms`, or `userdata` arms an
+EmulationStation restart: ES keeps gamelists in memory and saves them over
+`gamelist.xml` (and `es_settings.cfg`) on a normal exit, which would undo the
+restore. When Toolbox closes, the launcher SIGKILLs ES (so that save never
+runs) and Batocera respawns it with the restored files. Leave via Toolbox, not
+ES's own quit or power menu, until ES has restarted. See [Configuration](#configuration) to point it at your server.
 
 ### ROMarr Sync
 
@@ -296,7 +301,7 @@ without pygame, a network, or a real `/userdata`.
 ## Test
 
 ```bash
-python3 tests/selftest.py      # 198 assertions, no pygame/network needed
+python3 tests/selftest.py      # 244 assertions, no pygame/network needed
 ```
 
 ## More tiny tools for home labs

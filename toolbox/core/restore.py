@@ -44,6 +44,21 @@ CATEGORY_SUMMARY = {
     "userdata": "everything except ROMs -> /userdata",
 }
 
+# Categories that can overwrite files EmulationStation rewrites from memory on
+# a clean exit: every system's gamelist.xml (under roms/) and es_settings.cfg
+# (under system/configs/emulationstation/). The Toolbox is a Port launched FROM
+# ES, so ES stays running underneath it; a normal quit afterwards would save
+# ES's stale in-memory copy over the restored files and undo the restore (the
+# "art came back but covers don't show" report). Guarded restores ask the
+# launcher to SIGKILL ES on exit (uncatchable, so the save never runs) and the
+# supervisor respawns it, reading the restored files.
+ES_GUARDED = {"configs", "roms", "userdata"}
+
+
+def needs_es_guard(cat: str, *, dry_run: bool) -> bool:
+    """True when a restore can write files ES would clobber on a clean exit."""
+    return not dry_run and cat in ES_GUARDED
+
 
 @dataclass
 class RestoreSource:

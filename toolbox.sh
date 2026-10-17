@@ -5,8 +5,9 @@
 cd /userdata/roms/ports || exit 1
 python3 -m toolbox
 
-# ROMarr Sync drops this sentinel and exits so we restart ES *after* the Port
-# is gone and the freshly synced games get scanned in. SIGKILL, not graceful:
+# ROMarr Sync and a real Restore of configs/roms/userdata drop this sentinel so
+# we restart ES *after* the Port is gone: synced games get scanned in, and a
+# restored gamelist.xml / es_settings.cfg is not overwritten by ES. SIGKILL, not graceful:
 # ES on a clean quit saves its stale in-memory gamelists, and the supervisor
 # respawns it fresh either way. Kill by pidof, not pkill: Linux truncates the
 # process comm to 15 chars, so the 16-char name never matches pkill's default.

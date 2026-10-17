@@ -713,6 +713,11 @@ class App:
             self.rs_done = False
             self.rs_result = None
             self.rs_leg, self.rs_pct = "", 0
+            if restore.needs_es_guard(self.rs_cat, dry_run=self.restore_dryrun):
+                # Arm BEFORE writing: however Toolbox exits from here (even a
+                # crash), the launcher SIGKILLs ES so it can't save its stale
+                # gamelists over the restored ones.
+                romarr_sync.request_es_restart()
             self._spawn(self._restore_thread, "rs_done")
             self.state = "restore_progress"
         elif action == BACK:
@@ -730,6 +735,11 @@ class App:
             self._text(self.f_mid, "REAL restore: OVERWRITES local files", int(self.H * 0.48), color=PINK)
         self._text(self.f_small, "no files are ever deleted, only overwritten/added",
                    int(self.H * 0.58), color=DIM)
+        if restore.needs_es_guard(self.rs_cat, dry_run=self.restore_dryrun):
+            self._text(self.f_small, "EmulationStation restarts when Toolbox closes,",
+                       int(self.H * 0.66), color=PINK)
+            self._text(self.f_small, "so it can't save over the restored gamelists.",
+                       int(self.H * 0.71), color=PINK)
         self._hint(["Enter/A: start", "Esc/B: back"])
 
     def _restore_thread(self) -> None:
@@ -745,6 +755,30 @@ class App:
                    int(self.H * 0.46), color=WHITE)
         self._bar(self.rs_pct, int(self.H * 0.54))
         self._hint(["please wait..."])
+
+    def on_restore_restart(self, action: str) -> None:
+        if action == CONFIRM:
+            self.running = False          # exit; launcher restarts ES on the sentinel
+        elif action == BACK:
+            self.state, self.menu_index = "main", 0
+
+    def draw_restore_restart(self) -> None:
+        self._title("RESTORE DONE")
+        r = self.rs_result
+        if r and r.failed == 0:
+            self._text(self.f_mid, f"Restore complete: {r.ok} OK", int(self.H * 0.34), color=GREEN)
+        else:
+            self._text(self.f_mid, f"Restore: {r.ok if r else 0} OK, {r.failed if r else 1} FAILED",
+                       int(self.H * 0.34), color=PINK)
+        self._text(self.f_mid, "Restart EmulationStation now to load it?",
+                   int(self.H * 0.46), color=WHITE)
+        self._text(self.f_small, "Closing Toolbox ANY way force-restarts ES (it's armed).",
+                   int(self.H * 0.56), color=DIM)
+        self._text(self.f_small, "Don't quit ES from its menu or power off first:",
+                   int(self.H * 0.61), color=PINK)
+        self._text(self.f_small, "a normal ES exit saves its old gamelists over these.",
+                   int(self.H * 0.66), color=PINK)
+        self._hint(["Enter/A: restart ES now", "Esc/B: later"])
 
     # ===================================================================
     # ROMARR SYNC (drain NAS staging into /userdata/roms; dry-run by default)
@@ -1332,7 +1366,11 @@ class App:
                             "run a Backup first")
         elif self.state == "restore_progress" and self.rs_done:
             r = self.rs_result
-            if r and r.failed == 0:
+            if restore.needs_es_guard(self.rs_cat, dry_run=self.restore_dryrun):
+                # Armed even on a partial failure: rsync may have written some
+                # gamelists, and those still need protecting from ES's save.
+                self.state = "restore_restart"
+            elif r and r.failed == 0:
                 self._flash(f"Restore complete: {r.ok} OK", "main",
                             "dry-run, nothing written" if self.restore_dryrun else "")
             elif r:
