@@ -5,7 +5,9 @@ Safety model (mirrors the rest of the Toolbox): we only ever PUSH. No
 worst it re-copies. Three tiers trade size for completeness:
 
     small       saves (game saves + states) + system/configs
-    medium      small + the ROM files (scraped media excluded to stay lean)
+    medium      small + the ROM files only: scraped media (cover art, videos,
+                manuals) is NOT backed up. gamelist.xml files are, so their
+                <image>/<video> paths point at art this tier does not carry.
     everything  the whole /userdata tree (true full backup, media included)
 
 The functions that BUILD the rsync commands are pure and unit-tested. The
@@ -75,7 +77,7 @@ def tier_summary(tier: str) -> str:
     """Human one-liner for the confirm screen."""
     return {
         "small": "saves + states + configs",
-        "medium": "saves + states + configs + ROMs (no scraped media)",
+        "medium": "saves/states + configs + ROMs, NO cover art/videos",
         "everything": "full /userdata + ROMs (same layout as the scheduled mirror)",
     }.get(tier, tier)
 

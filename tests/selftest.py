@@ -144,6 +144,12 @@ def test_backup(tmp: Path) -> None:
     medium = backup.tier_sources("medium")
     check("medium tier = 3 legs", len(medium) == 3)
     check("medium roms leg has media excludes", any(s.excludes for s in medium))
+    check("medium excludes cover art + video dirs",
+          {"images/", "videos/", "media/"} <= set(medium[2].excludes))
+    check("medium keeps gamelist.xml (not excluded)",
+          not any("gamelist" in e for e in medium[2].excludes))
+    check("medium summary says cover art is skipped",
+          "NO cover art" in backup.tier_summary("medium"))
     everything = backup.tier_sources("everything")
     check("everything = 2 legs (userdata excl roms + roms), mirrors the cron",
           len(everything) == 2 and everything[0].rel == "" and everything[0].dest_name == "userdata"
@@ -361,6 +367,17 @@ def test_restore(tmp: Path) -> None:
     check("listing keeps only known cats in canonical order",
           cats == ["saves", "configs", "roms", "userdata"])
     check("empty listing -> []", restore.parse_remote_listing("") == [])
+
+    # ES guard: real restores that can touch gamelist.xml / es_settings.cfg.
+    for c in ("roms", "userdata", "configs"):
+        check(f"real {c} restore needs the ES guard",
+              restore.needs_es_guard(c, dry_run=False))
+        check(f"dry-run {c} restore skips the ES guard",
+              not restore.needs_es_guard(c, dry_run=True))
+    check("saves restore never needs the ES guard",
+          not restore.needs_es_guard("saves", dry_run=False))
+    check("every guarded category is a real category",
+          restore.ES_GUARDED <= set(restore.CATEGORIES))
 
 
 def test_romarr_sync(tmp: Path) -> None:
