@@ -5,4 +5,4 @@ dashboard, a version-aware BIOS check, a safe Shader picker, 1G1R Library dedup,
 Performance toggles, RetroAchievements, and Crash Logs. The `core` package is
 pure and headless-testable; `ui` is the pygame front-end.
 """
-__version__ = "0.4.1"
+__version__ = "0.4.2"

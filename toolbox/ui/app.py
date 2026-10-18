@@ -17,6 +17,7 @@ from pathlib import Path
 
 import pygame
 
+from .. import __version__
 from ..core import config, backup, audit, shaders, bios, restore, library, perf, cheevos, logs, romarr_sync
 from . import controls
 from .controls import UP, DOWN, LEFT, RIGHT, CONFIRM, BACK, SELECT, QUIT
@@ -1457,7 +1458,7 @@ class App:
         free for the controls hint, RGUI-style)."""
         m = getattr(self, "_m", int(min(self.W, self.H) * 0.03))
         y = m + int(14 * self.s) + self.f_big.get_height() - self.f_small.get_height() - int(2 * self.s)
-        surf = self.f_small.render(f"Toolbox  ·  Batocera {self.bver}", True, DIM)
+        surf = self.f_small.render(f"Toolbox v{__version__}  ·  Batocera {self.bver}", True, DIM)
         self.screen.blit(surf, (self.W - m - int(20 * self.s) - surf.get_width(), y))
 
     # ===================================================================
